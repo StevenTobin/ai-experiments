@@ -13,7 +13,7 @@ from components.report import generate_report
 )
 def analyzer_pipeline(
     model_name: str = "Qwen2.5-Coder-3B-Instruct",
-    endpoint_url: str = "http://analyzer-llm-predictor.in-cluster-ci.svc.cluster.local"
+    endpoint_url: str = "http://analyzer-llm-predictor.in-cluster-ci.svc.cluster.local:8080"
 ):
     # Step 1: Collect Data
     collect_task = collect_cluster_state()

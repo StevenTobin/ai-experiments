@@ -341,7 +341,7 @@ data:
       inputDefinitions:
         parameters:
           endpoint_url:
-            defaultValue: http://analyzer-llm-predictor.in-cluster-ci.svc.cluster.local
+            defaultValue: http://analyzer-llm-predictor.in-cluster-ci.svc.cluster.local:8080
             isOptional: true
             parameterType: STRING
           model_name:
