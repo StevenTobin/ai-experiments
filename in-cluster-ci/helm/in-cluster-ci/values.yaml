@@ -14,5 +14,5 @@ pipeline:
   namespace: "in-cluster-ci"
 
 setupJob:
-  image: "registry.access.redhat.com/ubi9/python-311:latest" # Base python image
+  image: "registry.access.redhat.com/ubi9/python-311:latest" # Base python image to build pipeline
   backoffLimit: 4
