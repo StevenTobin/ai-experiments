@@ -6,7 +6,6 @@ metadata:
     helm.sh/hook: pre-install,pre-upgrade
     helm.sh/hook-weight: "0"
 ---
-# We need to give the pipeline setup job permission to create resources in the DSP namespace
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -18,16 +17,31 @@ rules:
   - apiGroups: ["kubeflow.org"]
     resources: ["pipelines", "experiments", "runs", "recurringruns"]
     verbs: ["get", "list", "create", "update", "patch", "delete"]
-  - apiGroups: [""]
-    resources: ["pods/log", "pods"]
-    verbs: ["get", "list", "watch"]
-  - apiGroups: ["datasciencecluster.opendatahub.io"]
-    resources: ["datascienceclusters"]
-    verbs: ["get", "list", "watch"]
   - apiGroups: ["datasciencepipelinesapplications.opendatahub.io"]
     resources: ["datasciencepipelinesapplications"]
     verbs: ["get", "list", "watch"]
     resourceNames: ["ds-pipeline"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: in-cluster-ci-pipeline-reader
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "events", "resourcequotas", "namespaces"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["datasciencecluster.opendatahub.io"]
+    resources: ["datascienceclusters"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["dscinitialization.opendatahub.io"]
+    resources: ["dscinitializations"]
+    verbs: ["get", "list", "watch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -44,8 +58,6 @@ subjects:
   - kind: ServiceAccount
     name: in-cluster-ci-setup
     namespace: {{ .Release.Namespace }}
-
-# Also grant the pipeline default service account (used by DSP when running pods) the right to read operator logs
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -54,8 +66,8 @@ metadata:
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: in-cluster-ci-setup-role
+  name: in-cluster-ci-pipeline-reader
 subjects:
   - kind: ServiceAccount
-    name: default # Assuming standard pipeline-runner service account in the target namespace
+    name: pipeline-runner-ds-pipeline
     namespace: {{ .Values.pipeline.namespace }}
