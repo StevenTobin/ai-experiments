@@ -287,7 +287,7 @@ data:
         tasks:
           analyze-data:
             cachingOptions:
-              enableCache: true
+              enableCache: false
             componentRef:
               name: comp-analyze-data
             dependentTasks:
@@ -311,14 +311,14 @@ data:
               name: analyze-data
           collect-cluster-state:
             cachingOptions:
-              enableCache: true
+              enableCache: false
             componentRef:
               name: comp-collect-cluster-state
             taskInfo:
               name: collect-cluster-state
           generate-report:
             cachingOptions:
-              enableCache: true
+              enableCache: false
             componentRef:
               name: comp-generate-report
             dependentTasks:
@@ -333,7 +333,7 @@ data:
               name: generate-report
           run-health-check:
             cachingOptions:
-              enableCache: true
+              enableCache: false
             componentRef:
               name: comp-run-health-check
             taskInfo:
