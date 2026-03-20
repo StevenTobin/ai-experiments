@@ -8,36 +8,42 @@ def analyze_data(cluster_data: str, health_check_output: str, model_name: str, e
     """Sends the collected data to the locally served LLM for analysis."""
     import requests
     import json
-    
-    # We construct the prompt instructing the LLM to act as an SRE
-    prompt = f"""
-    You are an expert Kubernetes and OpenDataHub Site Reliability Engineer.
-    Please review the following cluster state, recent operator logs, and health check output.
-    Identify any potential issues, bugs, or misconfigurations, and provide recommendations.
-    
-    Cluster Data:
-    {cluster_data}
-    
-    Health Check Output:
-    {health_check_output}
-    
-    Provide your analysis in Markdown format.
-    """
-    
+
+    def truncate(text, max_chars=3000):
+        if len(text) > max_chars:
+            return text[:max_chars] + "\n... [truncated]"
+        return text
+
+    hc_lines = []
+    for line in health_check_output.split("\n"):
+        if not line.startswith("go: downloading"):
+            hc_lines.append(line)
+    clean_hc = "\n".join(hc_lines)
+
+    prompt = f"""You are an expert Kubernetes and OpenDataHub SRE.
+Review the cluster state and health check output below.
+List the top issues and give short actionable recommendations.
+
+Cluster Data:
+{truncate(cluster_data)}
+
+Health Check:
+{truncate(clean_hc)}
+
+Respond in concise Markdown with bullet points."""
+
     headers = {"Content-Type": "application/json"}
     payload = {
         "model": model_name,
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.2,
-        "max_tokens": 1000
+        "max_tokens": 512
     }
-    
-    # We expect the vLLM server to be exposed at the given endpoint
-    # E.g., http://analyzer-llm.in-cluster-ci.svc.cluster.local:8080/v1/chat/completions
+
     full_url = f"{endpoint_url}/v1/chat/completions"
-    
+
     try:
-        response = requests.post(full_url, json=payload, headers=headers)
+        response = requests.post(full_url, json=payload, headers=headers, timeout=300)
         response.raise_for_status()
         result = response.json()
         return result["choices"][0]["message"]["content"]

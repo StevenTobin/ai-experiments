@@ -1,51 +1,40 @@
 apiVersion: serving.kserve.io/v1alpha1
 kind: ServingRuntime
 metadata:
-  name: vllm-runtime
+  name: llamacpp-runtime
 spec:
   supportedModelFormats:
-    - name: pytorch
-      version: "1"
-    - name: vllm
+    - name: gguf
       version: "1"
   containers:
     - name: kserve-container
-      image: ghcr.io/huggingface/text-generation-inference:2.4.0-intel-cpu
-      command:
-        - "text-generation-launcher"
+      image: ghcr.io/ggml-org/llama.cpp:server
       args:
-        - "--model-id"
-        - "{{ .Values.model.name }}"
+        - "--hf-repo"
+        - "{{ .Values.model.repo }}"
+        - "--hf-file"
+        - "{{ .Values.model.file }}"
         - "--port"
         - "8080"
-        - "--trust-remote-code"
-        - "--max-batch-prefill-tokens"
+        - "--host"
+        - "0.0.0.0"
+        - "--threads"
+        - "{{ .Values.model.threads }}"
+        - "--ctx-size"
         - "4096"
+        - "--chat-template"
+        - "chatml"
       ports:
         - containerPort: 8080
           protocol: TCP
       env:
         - name: HF_HOME
           value: /tmp/hf_home
-        - name: HUGGINGFACE_HUB_CACHE
-          value: /tmp/hf_home
-        - name: TRANSFORMERS_CACHE
-          value: /tmp/hf_home
-        - name: NUMBA_CACHE_DIR
-          value: /tmp/numba_cache
-        - name: PORT
-          value: "8080"
       volumeMounts:
-        - name: shm
-          mountPath: /dev/shm
         - name: tmp-dir
           mountPath: /tmp
       resources:
         {{- toYaml .Values.model.resources | nindent 8 }}
   volumes:
-    - name: shm
-      emptyDir:
-        medium: Memory
-        sizeLimit: 2Gi
     - name: tmp-dir
       emptyDir: {}

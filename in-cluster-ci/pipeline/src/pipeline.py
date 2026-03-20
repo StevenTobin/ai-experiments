@@ -12,8 +12,8 @@ from components.report import generate_report
     description="Collects ODH logs, runs health check, analyzes with a local LLM, and generates a health report."
 )
 def analyzer_pipeline(
-    model_name: str = "Qwen/Qwen2.5-0.5B-Instruct",
-    endpoint_url: str = "http://analyzer-llm-predictor.in-cluster-ci.svc.cluster.local:8080"
+    model_name: str = "Qwen2.5-Coder-3B-Instruct",
+    endpoint_url: str = "http://analyzer-llm-predictor.in-cluster-ci.svc.cluster.local"
 ):
     # Step 1: Collect Data
     collect_task = collect_cluster_state()

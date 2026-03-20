@@ -9,9 +9,7 @@ spec:
     minReplicas: 1
     model:
       modelFormat:
-        name: vllm
-      runtime: vllm-runtime
-      # Remove storageUri so KServe doesn't try to attach a model-dir volume,
-      # and instead lets vllm pull from HuggingFace via the --model flag.
+        name: gguf
+      runtime: llamacpp-runtime
       resources:
         {{- toYaml .Values.model.resources | nindent 8 }}

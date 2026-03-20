@@ -1,12 +1,16 @@
 # Default values for in-cluster-ci.
 
 model:
-  name: "Qwen/Qwen2.5-0.5B-Instruct"
+  repo: "bartowski/Qwen2.5-Coder-3B-Instruct-GGUF"
+  file: "Qwen2.5-Coder-3B-Instruct-Q4_K_M.gguf"
+  threads: "12"
   resources:
     limits:
-      memory: "8Gi"
+      cpu: "12"
+      memory: "6Gi"
     requests:
-      memory: "8Gi"
+      cpu: "8"
+      memory: "4Gi"
 
 pipeline:
   name: "odh-analyzer-pipeline"
