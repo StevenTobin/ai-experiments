@@ -1,0 +1,16 @@
+apiVersion: serving.kserve.io/v1beta1
+kind: InferenceService
+metadata:
+  name: analyzer-llm
+  annotations:
+    serving.kserve.io/deploymentMode: RawDeployment
+spec:
+  predictor:
+    minReplicas: 1
+    model:
+      modelFormat:
+        name: vllm
+      runtime: vllm-runtime
+      storageUri: "pvc://{{ .Values.model.pvcName }}"
+      resources:
+        {{- toYaml .Values.model.resources | nindent 8 }}

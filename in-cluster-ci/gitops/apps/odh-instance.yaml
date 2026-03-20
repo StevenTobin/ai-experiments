@@ -1,0 +1,23 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: odh-instance
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  project: default
+  source:
+    repoURL: "https://github.com/YOUR_ORG/in-cluster-ci.git" # REPLACE WITH YOUR REPO URL
+    targetRevision: main
+    path: helm/odh-instance
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: opendatahub
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true

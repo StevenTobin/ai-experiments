@@ -1,0 +1,23 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: in-cluster-ci
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"
+spec:
+  project: default
+  source:
+    repoURL: "https://github.com/YOUR_ORG/in-cluster-ci.git" # REPLACE WITH YOUR REPO URL
+    targetRevision: main
+    path: helm/in-cluster-ci
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: in-cluster-ci
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true

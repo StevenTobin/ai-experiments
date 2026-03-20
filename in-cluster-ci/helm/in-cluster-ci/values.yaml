@@ -1,0 +1,21 @@
+# Default values for in-cluster-ci.
+
+model:
+  name: "llama-3-8b-instruct"
+  pvcName: "model-weights-pvc" # Assuming a PVC exists or is created out of band with weights
+  resources:
+    limits:
+      nvidia.com/gpu: "1"
+      memory: "24Gi"
+    requests:
+      nvidia.com/gpu: "1"
+      memory: "24Gi"
+
+pipeline:
+  name: "odh-analyzer-pipeline"
+  schedule: "0 0 * * *" # Daily at midnight
+  namespace: "opendatahub"
+
+setupJob:
+  image: "quay.io/opendatahub/kubeflow-pipelines-kfp-sdk:latest" # Base python image with KFP
+  backoffLimit: 4

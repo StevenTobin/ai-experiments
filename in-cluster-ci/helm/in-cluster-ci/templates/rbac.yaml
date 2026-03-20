@@ -1,0 +1,57 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: in-cluster-ci-setup
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "0"
+---
+# We need to give the pipeline setup job permission to create resources in the DSP namespace
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: in-cluster-ci-setup-role
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "0"
+rules:
+  - apiGroup: "kubeflow.org"
+    resources: ["pipelines", "experiments", "runs", "recurringruns"]
+    verbs: ["get", "list", "create", "update", "patch", "delete"]
+  - apiGroup: ""
+    resources: ["pods/log", "pods"]
+    verbs: ["get", "list", "watch"]
+  - apiGroup: "datasciencecluster.opendatahub.io"
+    resources: ["datascienceclusters"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: in-cluster-ci-setup-binding
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "0"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: in-cluster-ci-setup-role
+subjects:
+  - kind: ServiceAccount
+    name: in-cluster-ci-setup
+    namespace: {{ .Release.Namespace }}
+
+# Also grant the pipeline default service account (used by DSP when running pods) the right to read operator logs
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: in-cluster-ci-pipeline-runner-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: in-cluster-ci-setup-role
+subjects:
+  - kind: ServiceAccount
+    name: default # Assuming standard pipeline-runner service account in the target namespace
+    namespace: {{ .Values.pipeline.namespace }}

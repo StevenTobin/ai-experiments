@@ -1,0 +1,32 @@
+apiVersion: datasciencecluster.opendatahub.io/v1
+kind: DataScienceCluster
+metadata:
+  name: default-dsc
+spec:
+  components:
+    kserve:
+      managementState: Managed
+      serving:
+        ingressGateway:
+          certificate:
+            type: SelfSigned
+        managementState: Managed
+        name: knative-serving
+    datasciencepipelines:
+      managementState: Managed
+    dashboard:
+      managementState: Managed
+    codeflarepipelines:
+      managementState: Removed
+    kueue:
+      managementState: Removed
+    modelmeshserving:
+      managementState: Removed
+    modelregistry:
+      managementState: Removed
+    ray:
+      managementState: Removed
+    trustyai:
+      managementState: Removed
+    workbenches:
+      managementState: Removed

@@ -1,0 +1,6 @@
+apiVersion: v2
+name: in-cluster-ci
+description: A Helm chart for deploying the AI-driven OpenDataHub analyzer pipeline and model serving
+type: application
+version: 0.1.0
+appVersion: "1.0.0"

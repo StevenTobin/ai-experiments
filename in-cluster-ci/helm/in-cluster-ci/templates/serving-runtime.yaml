@@ -1,0 +1,34 @@
+apiVersion: serving.kserve.io/v1alpha1
+kind: ServingRuntime
+metadata:
+  name: vllm-runtime
+  annotations:
+    opendatahub.io/recommended-accelerators: '["nvidia.com/gpu"]'
+spec:
+  supportedModelFormats:
+    - name: pytorch
+      version: "1"
+    - name: vllm
+      version: "1"
+  containers:
+    - name: kserve-container
+      image: quay.io/vllm/vllm-openai:v0.4.0
+      command:
+        - "python3"
+        - "-m"
+        - "vllm.entrypoints.openai.api_server"
+      args:
+        - "--model"
+        - "/mnt/models"
+        - "--port"
+        - "8080"
+        - "--served-model-name"
+        - "{{ .Values.model.name }}"
+      ports:
+        - containerPort: 8080
+          protocol: TCP
+      volumeMounts:
+        - name: model-dir
+          mountPath: /mnt/models
+      resources:
+        {{- toYaml .Values.model.resources | nindent 8 }}
