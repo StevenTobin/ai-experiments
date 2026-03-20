@@ -19,16 +19,17 @@ spec:
         - "vllm.entrypoints.openai.api_server"
       args:
         - "--model"
-        - "/mnt/models"
+        - "{{ .Values.model.name }}" # Use the model name directly, vllm will download it from huggingface if not found locally
         - "--port"
         - "8080"
         - "--served-model-name"
         - "{{ .Values.model.name }}"
+        - "--trust-remote-code"
       ports:
         - containerPort: 8080
           protocol: TCP
-      volumeMounts:
-        - name: model-dir
-          mountPath: /mnt/models
+      env:
+        - name: HF_HOME
+          value: /tmp/hf_home
       resources:
         {{- toYaml .Values.model.resources | nindent 8 }}

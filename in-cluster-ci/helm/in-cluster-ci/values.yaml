@@ -1,15 +1,14 @@
 # Default values for in-cluster-ci.
 
 model:
-  name: "llama-3-8b-instruct"
-  pvcName: "model-weights-pvc" # Assuming a PVC exists or is created out of band with weights
+  name: "Qwen/Qwen2.5-0.5B-Instruct" # Using a much smaller model for default testing without needing a large GPU
   resources:
     limits:
       nvidia.com/gpu: "1"
-      memory: "24Gi"
+      memory: "8Gi"
     requests:
       nvidia.com/gpu: "1"
-      memory: "24Gi"
+      memory: "8Gi"
 
 pipeline:
   name: "odh-analyzer-pipeline"

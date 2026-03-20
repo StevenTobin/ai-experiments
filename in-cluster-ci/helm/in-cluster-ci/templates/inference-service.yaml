@@ -11,6 +11,7 @@ spec:
       modelFormat:
         name: vllm
       runtime: vllm-runtime
-      storageUri: "pvc://{{ .Values.model.pvcName }}"
+      # Remove storageUri so KServe doesn't try to attach a model-dir volume,
+      # and instead lets vllm pull from HuggingFace via the --model flag.
       resources:
         {{- toYaml .Values.model.resources | nindent 8 }}
