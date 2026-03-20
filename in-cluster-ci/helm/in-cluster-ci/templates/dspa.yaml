@@ -6,6 +6,7 @@ metadata:
     argocd.argoproj.io/sync-wave: "1"
 spec:
   dspVersion: v2
+  podToPodTLS: false
   database:
     mariaDB:
       deploy: true
