@@ -45,7 +45,7 @@ spec:
               
               # DSPA in ODH exposes ml-pipeline.NAMESPACE.svc.cluster.local:8888
               DSP_NAMESPACE = "{{ .Values.pipeline.namespace }}"
-              KFP_ENDPOINT = f"http://ds-pipeline-dspa.{DSP_NAMESPACE}.svc.cluster.local:8888"
+              KFP_ENDPOINT = f"http://ds-pipeline-ds-pipeline.{DSP_NAMESPACE}.svc.cluster.local:8888"
               
               print(f"Connecting to KFP at {KFP_ENDPOINT}")
               
