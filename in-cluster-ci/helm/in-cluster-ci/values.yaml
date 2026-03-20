@@ -11,7 +11,7 @@ model:
 pipeline:
   name: "odh-analyzer-pipeline"
   schedule: "0 0 * * *" # Daily at midnight
-  namespace: "opendatahub"
+  namespace: "in-cluster-ci"
 
 setupJob:
   image: "registry.access.redhat.com/ubi9/python-311:latest" # Base python image

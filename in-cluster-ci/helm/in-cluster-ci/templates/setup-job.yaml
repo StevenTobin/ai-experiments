@@ -19,14 +19,14 @@ spec:
           args:
             - |
               echo "Reconstructing Python package structure..."
-              mkdir -p /workspace/components
-              cp /src/collect.py /workspace/components/
-              cp /src/run_health_check.py /workspace/components/
-              cp /src/analyze.py /workspace/components/
-              cp /src/report.py /workspace/components/
-              cp /src/pipeline.py /workspace/
+              mkdir -p /tmp/workspace/components
+              cp /src/collect.py /tmp/workspace/components/
+              cp /src/run_health_check.py /tmp/workspace/components/
+              cp /src/analyze.py /tmp/workspace/components/
+              cp /src/report.py /tmp/workspace/components/
+              cp /src/pipeline.py /tmp/workspace/
               
-              cd /workspace
+              cd /tmp/workspace
               
               echo "Installing requirements..."
               pip install --quiet kfp kubernetes requests
