@@ -1,7 +1,7 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: submit-analyzer-pipeline-run-4
+  name: submit-analyzer-pipeline-run-5
   annotations:
     argocd.argoproj.io/sync-wave: "5"
 spec:
@@ -33,61 +33,61 @@ spec:
               python pipeline.py
               
               echo "Submitting pipeline to ODH Data Science Pipelines..."
-              # In ODH, the DSP API is typically exposed via a service in the user namespace
-              # or accessible via port-forward. For in-cluster, we hit the ml-pipeline service.
               
-              cat << 'EOF' > submit.py
+              cat << 'PYEOF' > submit.py
               import os
               import time
+              import urllib3
               from kfp.client import Client
               
-              # DSPA in ODH exposes ml-pipeline.NAMESPACE.svc.cluster.local:8888
-              DSP_NAMESPACE = "{{ .Values.pipeline.namespace }}"
-              KFP_ENDPOINT = f"http://ds-pipeline-ds-pipeline.{DSP_NAMESPACE}.svc.cluster.local:8888"
+              urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+              
+              DSP_NAMESPACE = os.environ.get("DSP_NAMESPACE", "in-cluster-ci")
+              
+              # Read the SA token for kube-rbac-proxy authentication
+              with open("/var/run/secrets/kubernetes.io/serviceaccount/token") as f:
+                  sa_token = f.read().strip()
+              
+              # Must use HTTPS port 8443 (kube-rbac-proxy) with bearer token
+              KFP_ENDPOINT = f"https://ds-pipeline-ds-pipeline.{DSP_NAMESPACE}.svc.cluster.local:8443"
               
               print(f"Connecting to KFP at {KFP_ENDPOINT}")
               
-              # Retry loop for connection
               client = None
-              for i in range(10):
+              for i in range(30):
                   try:
-                      client = Client(host=KFP_ENDPOINT)
+                      client = Client(
+                          host=KFP_ENDPOINT,
+                          existing_token=sa_token,
+                          ssl_sa_cert=False,
+                      )
+                      health = client.get_healthy()
+                      print(f"Connected to KFP successfully! Health: {health}")
                       break
                   except Exception as e:
-                      print(f"Waiting for DSP API... ({i}/10): {e}")
+                      print(f"Waiting for DSP API... ({i}/30): {e}")
                       time.sleep(10)
-                      
+              
               if not client:
                   print("Failed to connect to Data Science Pipelines API")
                   exit(1)
-                  
-              pipeline_name = "{{ .Values.pipeline.name }}"
+              
+              pipeline_name = os.environ.get("PIPELINE_NAME", "odh-analyzer-pipeline")
               pipeline_package_path = "analyzer_pipeline.yaml"
               
-              # Upload pipeline
+              print("Creating experiment and submitting pipeline...")
               try:
-                  # Check if it exists first to avoid duplicates
-                  existing = client.get_pipeline(pipeline_name)
-                  if existing:
-                      print(f"Pipeline {pipeline_name} already exists. Creating new version.")
-                      # Note: v2 SDK version handling varies; simple upload might fail if name exists
-                      # For robustness in a hook, we just create a run from the local yaml.
-              except Exception:
-                  pass
+                  experiment = client.create_experiment("CI Health Analyzer")
                   
-              print("Creating a scheduled run...")
-              # We use KFP Client to create a recurring run
-              try:
                   client.create_recurring_run(
-                      experiment_id=client.create_experiment("CI Health Analyzer").experiment_id,
+                      experiment_id=experiment.experiment_id,
                       job_name=f"{pipeline_name}-schedule",
-                      cron_expression="{{ .Values.pipeline.schedule }}",
+                      cron_expression=os.environ.get("PIPELINE_SCHEDULE", "0 0 * * *"),
                       pipeline_package_path=pipeline_package_path,
                       enable_caching=False
                   )
                   print("Scheduled run created successfully!")
                   
-                  # Create an immediate run as well
                   client.create_run_from_pipeline_package(
                       pipeline_file=pipeline_package_path,
                       arguments={},
@@ -97,10 +97,13 @@ spec:
                   print("Immediate run triggered!")
                   
               except Exception as e:
-                  print(f"Error submitting run: {e}")
+                  print(f"Error submitting pipeline: {e}")
                   exit(1)
-              EOF
+              PYEOF
               
+              DSP_NAMESPACE="{{ .Values.pipeline.namespace }}" \
+              PIPELINE_NAME="{{ .Values.pipeline.name }}" \
+              PIPELINE_SCHEDULE="{{ .Values.pipeline.schedule }}" \
               python submit.py
           volumeMounts:
             - name: source-code
