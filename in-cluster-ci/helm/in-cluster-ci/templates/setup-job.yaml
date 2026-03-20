@@ -1,7 +1,7 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: submit-analyzer-pipeline-run-5
+  name: submit-analyzer-pipeline-run-6
   annotations:
     argocd.argoproj.io/sync-wave: "5"
 spec:
@@ -59,8 +59,9 @@ spec:
                       client = Client(
                           host=KFP_ENDPOINT,
                           existing_token=sa_token,
-                          ssl_sa_cert=False,
                       )
+                      import ssl
+                      client._session.verify = False
                       health = client.get_healthy()
                       print(f"Connected to KFP successfully! Health: {health}")
                       break
