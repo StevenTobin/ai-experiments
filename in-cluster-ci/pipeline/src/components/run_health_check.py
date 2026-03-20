@@ -5,15 +5,14 @@ from kfp import dsl
     packages_to_install=["gitpython", "kubernetes"]
 )
 def run_health_check() -> str:
-    """Clones the opendatahub-operator repo and runs the health-check tool."""
+    """Clones the opendatahub-operator repo and runs the health-check tool with JSON output."""
     import subprocess
     import tempfile
-    import os
-    
-    # We need to make sure we have a temp dir to clone into
+    import json
+
     work_dir = tempfile.mkdtemp()
     repo_url = "https://github.com/opendatahub-io/opendatahub-operator.git"
-    
+
     print(f"Cloning {repo_url} into {work_dir}...")
     try:
         subprocess.run(
@@ -23,22 +22,49 @@ def run_health_check() -> str:
             text=True
         )
     except subprocess.CalledProcessError as e:
-        return f"Failed to clone repository: {e.stderr}"
-    
-    print("Running health-check tool...")
-    # The health check tool needs KUBECONFIG or incluster config.
-    # By default, client-go uses incluster config if running in a pod.
+        return json.dumps({
+            "exit_code": -1,
+            "report": None,
+            "stderr": f"Failed to clone repository: {e.stderr}"
+        })
+
+    print("Running health-check tool with -json output...")
     try:
-        # We need to run `go run cmd/health-check/main.go`
         result = subprocess.run(
-            ["go", "run", "cmd/health-check/main.go"],
+            ["go", "run", "cmd/health-check/main.go", "-json"],
             cwd=work_dir,
-            check=False,  # Don't throw exception on non-zero exit, we want the output
+            check=False,
             capture_output=True,
-            text=True
+            text=True,
+            timeout=300
         )
-        
-        output = f"Health Check Exit Code: {result.returncode}\n\nSTDOUT:\n{result.stdout}\n\nSTDERR:\n{result.stderr}"
-        return output
+
+        report = None
+        if result.stdout.strip():
+            try:
+                report = json.loads(result.stdout)
+            except json.JSONDecodeError:
+                report = {"raw_output": result.stdout}
+
+        stderr_lines = [
+            line for line in result.stderr.splitlines()
+            if not line.startswith("go: downloading")
+        ]
+
+        return json.dumps({
+            "exit_code": result.returncode,
+            "report": report,
+            "stderr": "\n".join(stderr_lines)
+        })
+    except subprocess.TimeoutExpired:
+        return json.dumps({
+            "exit_code": -2,
+            "report": None,
+            "stderr": "Health check timed out after 300 seconds"
+        })
     except Exception as e:
-        return f"Failed to execute health check tool: {str(e)}"
+        return json.dumps({
+            "exit_code": -1,
+            "report": None,
+            "stderr": f"Failed to execute health check tool: {str(e)}"
+        })

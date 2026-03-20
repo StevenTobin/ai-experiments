@@ -1,38 +1,51 @@
-import os
 from kfp import dsl
 from kfp import compiler
 
-from components.collect import collect_cluster_state
 from components.run_health_check import run_health_check
-from components.analyze import analyze_data
+from components.collect_supplementary import collect_supplementary_data
+from components.analyze_issues import analyze_issues
+from components.analyze import interpret_with_llm
 from components.report import generate_report
 
 @dsl.pipeline(
-    name="odh-in-cluster-ci-analyzer",
-    description="Collects ODH logs, runs health check, analyzes with a local LLM, and generates a health report."
+    name="odh-cluster-analyzer",
+    description="Structured ODH cluster health analysis: collects health data, performs deterministic issue analysis, then uses an LLM for root cause interpretation."
 )
 def analyzer_pipeline(
     model_name: str = "Qwen2.5-Coder-3B-Instruct",
     endpoint_url: str = "http://analyzer-llm-predictor.in-cluster-ci.svc.cluster.local:8080"
 ):
-    # Step 1: Collect Data
-    collect_task = collect_cluster_state()
-    
-    # Step 1b: Run Health Check
-    health_check_task = run_health_check()
-    health_check_task.set_env_variable("HOME", "/tmp")
-    health_check_task.set_env_variable("GOPATH", "/tmp/go")
-    
-    # Step 2: Analyze Data
-    analyze_task = analyze_data(
-        cluster_data=collect_task.output,
-        health_check_output=health_check_task.output,
+    # Phase 1: Parallel structured data collection
+    health_task = run_health_check()
+    health_task.set_env_variable("HOME", "/tmp")
+    health_task.set_env_variable("GOPATH", "/tmp/go")
+    health_task.set_caching_options(False)
+
+    supplementary_task = collect_supplementary_data()
+    supplementary_task.set_caching_options(False)
+
+    # Phase 2: Deterministic issue analysis
+    issues_task = analyze_issues(
+        health_data=health_task.output,
+        supplementary_data=supplementary_task.output
+    )
+    issues_task.set_caching_options(False)
+
+    # Phase 3: LLM root cause interpretation
+    llm_task = interpret_with_llm(
+        issue_report=issues_task.output,
+        supplementary_data=supplementary_task.output,
         model_name=model_name,
         endpoint_url=endpoint_url
     )
-    
-    # Step 3: Generate Report
-    report_task = generate_report(analysis=analyze_task.output)
+    llm_task.set_caching_options(False)
+
+    # Phase 4: Structured report
+    report_task = generate_report(
+        issue_report=issues_task.output,
+        llm_analysis=llm_task.output
+    )
+    report_task.set_caching_options(False)
 
 if __name__ == "__main__":
     compiler.Compiler().compile(analyzer_pipeline, "analyzer_pipeline.yaml")

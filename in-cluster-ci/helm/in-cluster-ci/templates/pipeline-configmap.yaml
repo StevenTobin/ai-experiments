@@ -7,24 +7,20 @@ metadata:
 data:
   analyzer_pipeline.yaml: |
     components:
-      comp-analyze-data:
-        executorLabel: exec-analyze-data
+      comp-analyze-issues:
+        executorLabel: exec-analyze-issues
         inputDefinitions:
           parameters:
-            cluster_data:
+            health_data:
               parameterType: STRING
-            endpoint_url:
-              parameterType: STRING
-            health_check_output:
-              parameterType: STRING
-            model_name:
+            supplementary_data:
               parameterType: STRING
         outputDefinitions:
           parameters:
             Output:
               parameterType: STRING
-      comp-collect-cluster-state:
-        executorLabel: exec-collect-cluster-state
+      comp-collect-supplementary-data:
+        executorLabel: exec-collect-supplementary-data
         outputDefinitions:
           parameters:
             Output:
@@ -33,7 +29,25 @@ data:
         executorLabel: exec-generate-report
         inputDefinitions:
           parameters:
-            analysis:
+            issue_report:
+              parameterType: STRING
+            llm_analysis:
+              parameterType: STRING
+        outputDefinitions:
+          parameters:
+            Output:
+              parameterType: STRING
+      comp-interpret-with-llm:
+        executorLabel: exec-interpret-with-llm
+        inputDefinitions:
+          parameters:
+            endpoint_url:
+              parameterType: STRING
+            issue_report:
+              parameterType: STRING
+            model_name:
+              parameterType: STRING
+            supplementary_data:
               parameterType: STRING
         outputDefinitions:
           parameters:
@@ -47,144 +61,367 @@ data:
               parameterType: STRING
     deploymentSpec:
       executors:
-        exec-analyze-data:
+        exec-analyze-issues:
           container:
             args:
             - --executor_input
             - '{{`{{$}}`}}'
             - --function_to_execute
-            - analyze_data
+            - analyze_issues
             command:
             - sh
             - -c
-            - |
-              if ! [ -x "$(command -v pip)" ]; then
-                  python3 -m ensurepip || python3 -m ensurepip --user || apt-get install python3-pip
-              fi
-              PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location 'requests' && python3 -m pip install --quiet --no-warn-script-location 'kfp==2.16.0' '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<"3.9"' && "$0" "$@"
+            - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+              \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+              \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.16.0'\
+              \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
+              $0\" \"$@\"\n"
             - sh
             - -ec
-            - |
-              program_path=$(mktemp -d)
+            - 'program_path=$(mktemp -d)
+
+
               printf "%s" "$0" > "$program_path/ephemeral_component.py"
-              _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main --component_module_path "$program_path/ephemeral_component.py" "$@"
-            - |
-              import kfp
-              from kfp import dsl
-              from kfp.dsl import *
-              from typing import *
 
-              def analyze_data(cluster_data: str, health_check_output: str, model_name: str, endpoint_url: str) -> str:
-                  """Sends the collected data to the locally served LLM for analysis."""
-                  import requests
-                  import json
+              _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
 
-                  def truncate(text, max_chars=3000):
-                      if len(text) > max_chars:
-                          return text[:max_chars] + "\n... [truncated]"
-                      return text
-
-                  # Strip Go download noise from health check stderr
-                  hc_lines = []
-                  for line in health_check_output.split("\n"):
-                      if not line.startswith("go: downloading"):
-                          hc_lines.append(line)
-                  clean_hc = "\n".join(hc_lines)
-
-                  prompt = f"""You are an expert Kubernetes and OpenDataHub SRE.
-              Review the cluster state and health check output below.
-              List the top issues and give short actionable recommendations.
-
-              Cluster Data:
-              {truncate(cluster_data)}
-
-              Health Check:
-              {truncate(clean_hc)}
-
-              Respond in concise Markdown with bullet points."""
-
-                  headers = {"Content-Type": "application/json"}
-                  payload = {
-                      "model": model_name,
-                      "messages": [{"role": "user", "content": prompt}],
-                      "temperature": 0.2,
-                      "max_tokens": 512
-                  }
-                  full_url = f"{endpoint_url}/v1/chat/completions"
-                  try:
-                      response = requests.post(full_url, json=payload, headers=headers)
-                      response.raise_for_status()
-                      result = response.json()
-                      return result["choices"][0]["message"]["content"]
-                  except Exception as e:
-                      return f"Failed to get analysis from LLM: {str(e)}\nResponse: {response.text if 'response' in locals() else 'None'}"
+              '
+            - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+              \ *\n\ndef analyze_issues(health_data: str, supplementary_data: str) ->\
+              \ str:\n    \"\"\"Deterministic issue analysis: extracts, categorizes, and\
+              \ cross-references issues from structured health data.\"\"\"\n    import\
+              \ json\n    from datetime import datetime, timezone\n\n    CRITICAL = \"\
+              critical\"\n    HIGH = \"high\"\n    MEDIUM = \"medium\"\n    LOW = \"low\"\
+              \n\n    def make_issue(severity, issue_id, section, summary, details=None):\n\
+              \        return {\n            \"id\": issue_id,\n            \"severity\"\
+              : severity,\n            \"section\": section,\n            \"summary\"\
+              : summary,\n            \"details\": details or {},\n            \"correlated_signals\"\
+              : []\n        }\n\n    def pod_summary(pod):\n        return {\n       \
+              \     \"name\": pod.get(\"name\", \"\"),\n            \"phase\": pod.get(\"\
+              phase\", \"\"),\n            \"containers\": pod.get(\"containers\", [])\n\
+              \        }\n\n    health = json.loads(health_data)\n    supplementary =\
+              \ json.loads(supplementary_data)\n\n    report_json = health.get(\"report\"\
+              ) or {}\n    exit_code = health.get(\"exit_code\", -1)\n    health_stderr\
+              \ = health.get(\"stderr\", \"\")\n\n    issues = []\n\n    # --- Health\
+              \ check tool failure ---\n    if report_json is None or exit_code < 0:\n\
+              \        issues.append(make_issue(\n            CRITICAL, \"health-check-failed\"\
+              , \"health_check\",\n            f\"Health check tool failed (exit_code={exit_code})\"\
+              ,\n            details={\"stderr\": health_stderr[:1000]}\n        ))\n\
+              \        # Build minimal result and return early\n        by_sev = {\"critical\"\
+              : [i for i in issues if i[\"severity\"] == CRITICAL], \"high\": [], \"medium\"\
+              : [], \"low\": []}\n        return json.dumps({\n            \"timestamp\"\
+              : datetime.now(timezone.utc).isoformat(),\n            \"overall_healthy\"\
+              : False,\n            \"issues_by_severity\": by_sev,\n            \"healthy_sections\"\
+              : [],\n            \"summary\": f\"{len(by_sev['critical'])} critical, 0\
+              \ high, 0 medium, 0 low issues found\",\n            \"operator_version\"\
+              : \"unknown\"\n        })\n\n    # --- Nodes ---\n    nodes_section = report_json.get(\"\
+              nodes\", {})\n    if nodes_section.get(\"error\"):\n        issues.append(make_issue(CRITICAL,\
+              \ \"nodes-error\", \"nodes\", f\"Nodes section error: {nodes_section['error']}\"\
+              ))\n    for node in (nodes_section.get(\"data\", {}).get(\"nodes\") or []):\n\
+              \        if node.get(\"unhealthyReason\"):\n            issues.append(make_issue(\n\
+              \                CRITICAL, f\"node-unhealthy-{node.get('name', 'unknown')}\"\
+              , \"nodes\",\n                f\"Node '{node.get('name')}' is unhealthy:\
+              \ {node['unhealthyReason']}\",\n                details={\"conditions\"\
+              : node.get(\"conditions\", []), \"allocatable\": node.get(\"allocatable\"\
+              , \"\")}\n            ))\n\n    # --- Operator ---\n    operator_section\
+              \ = report_json.get(\"operator\", {})\n    if operator_section.get(\"error\"\
+              ):\n        issues.append(make_issue(CRITICAL, \"operator-error\", \"operator\"\
+              , f\"Operator section error: {operator_section['error']}\"))\n    op_data\
+              \ = operator_section.get(\"data\", {})\n    op_deployment = op_data.get(\"\
+              deployment\")\n    if op_deployment:\n        ready = op_deployment.get(\"\
+              readyReplicas\", 0)\n        desired = op_deployment.get(\"replicas\", 1)\n\
+              \        if ready < desired:\n            issues.append(make_issue(\n  \
+              \              CRITICAL, \"operator-not-ready\", \"operator\",\n       \
+              \         f\"Operator deployment has {ready}/{desired} ready replicas\"\
+              ,\n                details={\"deployment\": op_deployment}\n           \
+              \ ))\n\n    for dep_op in (op_data.get(\"dependentOperators\") or []):\n\
+              \        if not dep_op.get(\"installed\", True):\n            issues.append(make_issue(\n\
+              \                HIGH, f\"dependent-op-missing-{dep_op.get('name', 'unknown')}\"\
+              , \"operator\",\n                f\"Dependent operator '{dep_op.get('name')}'\
+              \ is not installed\",\n                details=dep_op\n            ))\n\
+              \        elif dep_op.get(\"error\"):\n            issues.append(make_issue(\n\
+              \                HIGH, f\"dependent-op-error-{dep_op.get('name', 'unknown')}\"\
+              , \"operator\",\n                f\"Dependent operator '{dep_op.get('name')}'\
+              \ has error: {dep_op['error']}\",\n                details=dep_op\n    \
+              \        ))\n\n    # --- DSC ---\n    dsc_section = report_json.get(\"dsc\"\
+              , {})\n    if dsc_section.get(\"error\"):\n        issues.append(make_issue(CRITICAL,\
+              \ \"dsc-error\", \"dsc\", f\"DSC section error: {dsc_section['error']}\"\
+              ))\n    dsc_data = dsc_section.get(\"data\", {})\n    for cond in (dsc_data.get(\"\
+              conditions\") or []):\n        if cond.get(\"type\") == \"Available\" and\
+              \ cond.get(\"status\") != \"True\":\n            issues.append(make_issue(\n\
+              \                CRITICAL, \"dsc-not-available\", \"dsc\",\n           \
+              \     f\"DSC condition 'Available' is {cond.get('status')}: {cond.get('message',\
+              \ '')}\",\n                details=cond\n            ))\n        elif cond.get(\"\
+              type\") == \"Degraded\" and cond.get(\"status\") == \"True\":\n        \
+              \    issues.append(make_issue(\n                HIGH, \"dsc-degraded\",\
+              \ \"dsc\",\n                f\"DSC is degraded: {cond.get('message', '')}\"\
+              ,\n                details=cond\n            ))\n\n    # --- DSCI ---\n\
+              \    dsci_section = report_json.get(\"dsci\", {})\n    if dsci_section.get(\"\
+              error\"):\n        issues.append(make_issue(CRITICAL, \"dsci-error\", \"\
+              dsci\", f\"DSCI section error: {dsci_section['error']}\"))\n    dsci_data\
+              \ = dsci_section.get(\"data\", {})\n    for cond in (dsci_data.get(\"conditions\"\
+              ) or []):\n        if cond.get(\"type\") == \"Available\" and cond.get(\"\
+              status\") != \"True\":\n            issues.append(make_issue(\n        \
+              \        CRITICAL, \"dsci-not-available\", \"dsci\",\n                f\"\
+              DSCI condition 'Available' is {cond.get('status')}: {cond.get('message',\
+              \ '')}\",\n                details=cond\n            ))\n\n    # --- Deployments\
+              \ ---\n    deploy_section = report_json.get(\"deployments\", {})\n    if\
+              \ deploy_section.get(\"error\"):\n        issues.append(make_issue(HIGH,\
+              \ \"deployments-error\", \"deployments\", f\"Deployments section error:\
+              \ {deploy_section['error']}\"))\n    for ns, deploys in (deploy_section.get(\"\
+              data\", {}).get(\"byNamespace\") or {}).items():\n        for dep in (deploys\
+              \ or []):\n            ready = dep.get(\"readyReplicas\", 0)\n         \
+              \   desired = dep.get(\"replicas\", 0)\n            if desired > 0 and ready\
+              \ < desired:\n                issues.append(make_issue(\n              \
+              \      HIGH, f\"deploy-not-ready-{ns}-{dep.get('name', 'unknown')}\", \"\
+              deployments\",\n                    f\"Deployment '{ns}/{dep.get('name')}'\
+              \ has {ready}/{desired} ready replicas\",\n                    details={\"\
+              namespace\": ns, \"name\": dep.get(\"name\"), \"conditions\": dep.get(\"\
+              conditions\", [])}\n                ))\n\n    # --- Pods ---\n    pods_section\
+              \ = report_json.get(\"pods\", {})\n    if pods_section.get(\"error\"):\n\
+              \        issues.append(make_issue(HIGH, \"pods-error\", \"pods\", f\"Pods\
+              \ section error: {pods_section['error']}\"))\n    for ns, pods in (pods_section.get(\"\
+              data\", {}).get(\"byNamespace\") or {}).items():\n        for pod in (pods\
+              \ or []):\n            phase = pod.get(\"phase\", \"\")\n            if\
+              \ phase in (\"Failed\", \"Unknown\"):\n                issues.append(make_issue(\n\
+              \                    HIGH, f\"pod-failed-{ns}-{pod.get('name', 'unknown')}\"\
+              , \"pods\",\n                    f\"Pod '{ns}/{pod.get('name')}' in phase\
+              \ '{phase}'\",\n                    details=pod_summary(pod)\n         \
+              \       ))\n            elif phase == \"Pending\":\n                issues.append(make_issue(\n\
+              \                    MEDIUM, f\"pod-pending-{ns}-{pod.get('name', 'unknown')}\"\
+              , \"pods\",\n                    f\"Pod '{ns}/{pod.get('name')}' is Pending\"\
+              ,\n                    details=pod_summary(pod)\n                ))\n  \
+              \          for container in (pod.get(\"containers\") or []):\n         \
+              \       if container.get(\"restartCount\", 0) > 3:\n                   \
+              \ issues.append(make_issue(\n                        HIGH, f\"pod-restarts-{ns}-{pod.get('name',\
+              \ 'unknown')}-{container.get('name', '')}\", \"pods\",\n               \
+              \         f\"Container '{container.get('name')}' in '{ns}/{pod.get('name')}'\
+              \ has {container['restartCount']} restarts\",\n                        details={\"\
+              container\": container}\n                    ))\n                waiting\
+              \ = container.get(\"waitingReason\", \"\")\n                if waiting in\
+              \ (\"CrashLoopBackOff\", \"ImagePullBackOff\", \"ErrImagePull\"):\n    \
+              \                issues.append(make_issue(\n                        HIGH,\
+              \ f\"pod-waiting-{ns}-{pod.get('name', 'unknown')}-{container.get('name',\
+              \ '')}\", \"pods\",\n                        f\"Container '{container.get('name')}'\
+              \ in '{ns}/{pod.get('name')}' is in {waiting}\",\n                     \
+              \   details={\"container\": container}\n                    ))\n\n    #\
+              \ --- Events ---\n    events_section = report_json.get(\"events\", {})\n\
+              \    if events_section.get(\"error\"):\n        issues.append(make_issue(MEDIUM,\
+              \ \"events-error\", \"events\", f\"Events section error: {events_section['error']}\"\
+              ))\n    warning_events = [evt for evt in (events_section.get(\"data\", {}).get(\"\
+              events\") or []) if evt.get(\"type\") == \"Warning\"]\n    if warning_events:\n\
+              \        issues.append(make_issue(\n            MEDIUM, \"warning-events\"\
+              , \"events\",\n            f\"{len(warning_events)} warning event(s) in\
+              \ the last 5 minutes\",\n            details={\"events\": warning_events[:20]}\n\
+              \        ))\n\n    # --- Quotas ---\n    quotas_section = report_json.get(\"\
+              quotas\", {})\n    if quotas_section.get(\"error\"):\n        issues.append(make_issue(MEDIUM,\
+              \ \"quotas-error\", \"quotas\", f\"Quotas section error: {quotas_section['error']}\"\
+              ))\n    for ns, quotas in (quotas_section.get(\"data\", {}).get(\"byNamespace\"\
+              ) or {}).items():\n        for q in (quotas or []):\n            if q.get(\"\
+              exceeded\"):\n                issues.append(make_issue(\n              \
+              \      MEDIUM, f\"quota-exceeded-{ns}-{q.get('name', 'unknown')}\", \"quotas\"\
+              ,\n                    f\"ResourceQuota '{ns}/{q.get('name')}' has exceeded\
+              \ resources: {', '.join(q['exceeded'])}\",\n                    details={\"\
+              used\": q.get(\"used\", {}), \"hard\": q.get(\"hard\", {})}\n          \
+              \      ))\n\n    # --- Supplementary: resource pressure ---\n    pressure\
+              \ = supplementary.get(\"resource_pressure\", {})\n    for pod_info in (pressure.get(\"\
+              data\") or []):\n        for pod_issue in pod_info.get(\"issues\", []):\n\
+              \            existing = any(i[\"id\"].startswith(\"pod-\") and pod_info[\"\
+              pod\"] in i[\"id\"] for i in issues)\n            if not existing:\n   \
+              \             issues.append(make_issue(\n                    HIGH, f\"pressure-{pod_info['namespace']}-{pod_info['pod']}\"\
+              , \"resource_pressure\",\n                    f\"Pod '{pod_info['namespace']}/{pod_info['pod']}':\
+              \ {pod_issue}\",\n                    details=pod_info\n               \
+              \ ))\n\n    # --- Supplementary: operator log errors ---\n    log_section\
+              \ = supplementary.get(\"operator_logs\", {})\n    error_count = log_section.get(\"\
+              error_warning_count\", 0)\n    if error_count > 20:\n        sample = log_section.get(\"\
+              data\", [])[:10]\n        issues.append(make_issue(\n            MEDIUM,\
+              \ \"high-log-error-rate\", \"operator_logs\",\n            f\"{error_count}\
+              \ error/warning log lines in last 500 lines\",\n            details={\"\
+              sample_lines\": sample}\n        ))\n\n    # --- Supplementary: OLM issues\
+              \ ---\n    olm = supplementary.get(\"olm_status\", {})\n    if olm.get(\"\
+              error\"):\n        issues.append(make_issue(LOW, \"olm-error\", \"olm\"\
+              , f\"Could not check OLM: {olm['error']}\"))\n    for sub_name, sub_info\
+              \ in (olm.get(\"data\") or {}).items():\n        if sub_info.get(\"state\"\
+              ) and sub_info[\"state\"] != \"AtLatestKnown\":\n            issues.append(make_issue(\n\
+              \                MEDIUM, f\"olm-sub-{sub_name}\", \"olm\",\n           \
+              \     f\"OLM Subscription '{sub_name}' state is '{sub_info['state']}' (expected\
+              \ AtLatestKnown)\",\n                details=sub_info\n            ))\n\n\
+              \    # --- Cross-reference correlated signals ---\n    events_list = events_section.get(\"\
+              data\", {}).get(\"events\") or []\n    log_lines = supplementary.get(\"\
+              operator_logs\", {}).get(\"data\", [])\n\n    for issue in issues:\n   \
+              \     section = issue[\"section\"]\n        if section in (\"deployments\"\
+              , \"pods\", \"operator\"):\n            details = issue.get(\"details\"\
+              , {})\n            resource_name = \"\"\n            if isinstance(details,\
+              \ dict):\n                resource_name = details.get(\"name\", \"\") or\
+              \ details.get(\"pod\", \"\")\n            if resource_name:\n          \
+              \      related_events = [\n                    {\"reason\": e.get(\"reason\"\
+              , \"\"), \"message\": e.get(\"message\", \"\")[:200]}\n                \
+              \    for e in events_list\n                    if resource_name.lower()\
+              \ in (e.get(\"name\", \"\") or \"\").lower()\n                       or\
+              \ resource_name.lower() in (e.get(\"message\", \"\") or \"\").lower()\n\
+              \                ]\n                if related_events:\n               \
+              \     issue[\"correlated_signals\"].append({\n                        \"\
+              source\": \"events\",\n                        \"detail\": f\"{len(related_events)}\
+              \ related event(s)\",\n                        \"data\": related_events[:5]\n\
+              \                    })\n                related_logs = [line[:300] for\
+              \ line in log_lines if resource_name.lower() in line.lower()]\n        \
+              \        if related_logs:\n                    issue[\"correlated_signals\"\
+              ].append({\n                        \"source\": \"operator_logs\",\n   \
+              \                     \"detail\": f\"{len(related_logs)} related log line(s)\"\
+              ,\n                        \"data\": related_logs[:5]\n                \
+              \    })\n\n    # --- Build result ---\n    by_severity = {\n        CRITICAL:\
+              \ [i for i in issues if i[\"severity\"] == CRITICAL],\n        HIGH: [i\
+              \ for i in issues if i[\"severity\"] == HIGH],\n        MEDIUM: [i for i\
+              \ in issues if i[\"severity\"] == MEDIUM],\n        LOW: [i for i in issues\
+              \ if i[\"severity\"] == LOW],\n    }\n\n    counts = {k: len(v) for k, v\
+              \ in by_severity.items()}\n    overall_healthy = counts[CRITICAL] == 0 and\
+              \ counts[HIGH] == 0\n\n    sections_with_issues = list(set(i[\"section\"\
+              ] for i in issues))\n    all_sections = [\"nodes\", \"deployments\", \"\
+              pods\", \"events\", \"quotas\", \"operator\", \"dsci\", \"dsc\"]\n    healthy_sections\
+              \ = [s for s in all_sections if s not in sections_with_issues]\n\n    olm_data\
+              \ = supplementary.get(\"olm_status\", {}).get(\"data\", {})\n    operator_info\
+              \ = supplementary.get(\"operator_deployment\", {}).get(\"data\", {})\n\n\
+              \    operator_version = \"unknown\"\n    for sub_name, sub_info in olm_data.items():\n\
+              \        if sub_info.get(\"installedCSV\"):\n            operator_version\
+              \ = sub_info[\"installedCSV\"]\n            break\n    if operator_version\
+              \ == \"unknown\":\n        images = operator_info.get(\"images\", [])\n\
+              \        if images:\n            operator_version = images[0]\n\n    result\
+              \ = {\n        \"timestamp\": datetime.now(timezone.utc).isoformat(),\n\
+              \        \"overall_healthy\": overall_healthy,\n        \"issues_by_severity\"\
+              : by_severity,\n        \"healthy_sections\": healthy_sections,\n      \
+              \  \"summary\": f\"{counts[CRITICAL]} critical, {counts[HIGH]} high, {counts[MEDIUM]}\
+              \ medium, {counts[LOW]} low issues found\",\n        \"operator_version\"\
+              : operator_version\n    }\n\n    return json.dumps(result)\n\n"
             image: registry.access.redhat.com/ubi9/python-311:latest
-        exec-collect-cluster-state:
+        exec-collect-supplementary-data:
           container:
             args:
             - --executor_input
             - '{{`{{$}}`}}'
             - --function_to_execute
-            - collect_cluster_state
+            - collect_supplementary_data
             command:
             - sh
             - -c
-            - |
-              if ! [ -x "$(command -v pip)" ]; then
-                  python3 -m ensurepip || python3 -m ensurepip --user || apt-get install python3-pip
-              fi
-              PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location 'kubernetes' 'requests' && python3 -m pip install --quiet --no-warn-script-location 'kfp==2.16.0' '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<"3.9"' && "$0" "$@"
+            - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+              \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+              \ python3 -m pip install --quiet --no-warn-script-location 'kubernetes'\
+              \  &&  python3 -m pip install --quiet --no-warn-script-location 'kfp==2.16.0'\
+              \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
+              $0\" \"$@\"\n"
             - sh
             - -ec
-            - |
-              program_path=$(mktemp -d)
-              printf "%s" "$0" > "$program_path/ephemeral_component.py"
-              _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main --component_module_path "$program_path/ephemeral_component.py" "$@"
-            - |
-              import kfp
-              from kfp import dsl
-              from kfp.dsl import *
-              from typing import *
+            - 'program_path=$(mktemp -d)
 
-              def collect_cluster_state() -> str:
-                  """Collects logs and status from the OpenDataHub operator."""
-                  from kubernetes import client, config
-                  import json
-                  import os
-                  try:
-                      config.load_incluster_config()
-                  except Exception as e:
-                      return f"Error loading config: {str(e)}"
-                  v1 = client.CoreV1Api()
-                  custom_api = client.CustomObjectsApi()
-                  report = {"logs": "", "components": {}}
-                  try:
-                      pods = v1.list_namespaced_pod(
-                          namespace="opendatahub-operator-system",
-                          label_selector="name=opendatahub-operator"
-                      )
-                      if pods.items:
-                          pod_name = pods.items[0].metadata.name
-                          logs = v1.read_namespaced_pod_log(
-                              name=pod_name,
-                              namespace="opendatahub-operator-system",
-                              tail_lines=200
-                          )
-                          report["logs"] = logs
-                  except Exception as e:
-                      report["logs"] = f"Failed to get logs: {str(e)}"
-                  try:
-                      dsc = custom_api.get_cluster_custom_object(
-                          group="datasciencecluster.opendatahub.io",
-                          version="v1",
-                          plural="datascienceclusters",
-                          name="default-dsc"
-                      )
-                      if "status" in dsc and "installedComponents" in dsc["status"]:
-                          report["components"] = dsc["status"]["installedComponents"]
-                  except Exception as e:
-                      report["components"] = {"error": f"Failed to get DSC: {str(e)}"}
-                  return json.dumps(report)
+
+              printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+              _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+              '
+            - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+              \ *\n\ndef collect_supplementary_data() -> str:\n    \"\"\"Collects data\
+              \ the health check tool does not cover: operator logs, OLM status, DSC conditions,\
+              \ resource pressure.\"\"\"\n    from kubernetes import client, config\n\
+              \    import json\n\n    try:\n        config.load_incluster_config()\n \
+              \   except Exception as e:\n        return json.dumps({\"error\": f\"Failed\
+              \ to load in-cluster config: {str(e)}\"})\n\n    v1 = client.CoreV1Api()\n\
+              \    custom_api = client.CustomObjectsApi()\n    apps_v1 = client.AppsV1Api()\n\
+              \n    report = {}\n\n    # 1. Operator error/warning logs (filtered)\n \
+              \   logs_section = {\"data\": [], \"error\": \"\"}\n    try:\n        pods\
+              \ = v1.list_namespaced_pod(\n            namespace=\"opendatahub-operator-system\"\
+              ,\n            label_selector=\"name=opendatahub-operator\"\n        )\n\
+              \        if not pods.items:\n            logs_section[\"error\"] = \"No\
+              \ operator pods found\"\n        else:\n            pod_name = pods.items[0].metadata.name\n\
+              \            raw_logs = v1.read_namespaced_pod_log(\n                name=pod_name,\n\
+              \                namespace=\"opendatahub-operator-system\",\n          \
+              \      tail_lines=500\n            )\n            error_lines = []\n   \
+              \         for line in raw_logs.splitlines():\n                lower = line.lower()\n\
+              \                if any(kw in lower for kw in ['\"level\":\"error\"', '\"\
+              level\":\"warn\"', \"error\", \"warning\", \"panic\", \"fatal\"]):\n   \
+              \                 error_lines.append(line)\n            logs_section[\"\
+              data\"] = error_lines[-100:]\n            logs_section[\"total_lines_scanned\"\
+              ] = 500\n            logs_section[\"error_warning_count\"] = len(error_lines)\n\
+              \    except Exception as e:\n        logs_section[\"error\"] = f\"Failed\
+              \ to get operator logs: {str(e)}\"\n    report[\"operator_logs\"] = logs_section\n\
+              \n    # 2. OLM Subscription status\n    olm_section = {\"data\": {}, \"\
+              error\": \"\"}\n    try:\n        subs = custom_api.list_namespaced_custom_object(\n\
+              \            group=\"operators.coreos.com\",\n            version=\"v1alpha1\"\
+              ,\n            namespace=\"opendatahub-operator-system\",\n            plural=\"\
+              subscriptions\"\n        )\n        for sub in subs.get(\"items\", []):\n\
+              \            name = sub.get(\"metadata\", {}).get(\"name\", \"unknown\"\
+              )\n            olm_section[\"data\"][name] = {\n                \"currentCSV\"\
+              : sub.get(\"status\", {}).get(\"currentCSV\", \"\"),\n                \"\
+              installedCSV\": sub.get(\"status\", {}).get(\"installedCSV\", \"\"),\n \
+              \               \"state\": sub.get(\"status\", {}).get(\"state\", \"\"),\n\
+              \                \"conditions\": [\n                    {\"type\": c.get(\"\
+              type\", \"\"), \"status\": c.get(\"status\", \"\"), \"message\": c.get(\"\
+              message\", \"\")}\n                    for c in sub.get(\"status\", {}).get(\"\
+              conditions\", [])\n                ]\n            }\n    except Exception\
+              \ as e:\n        olm_section[\"error\"] = f\"Failed to get OLM status: {str(e)}\"\
+              \n    report[\"olm_status\"] = olm_section\n\n    # 3. DSC full conditions\n\
+              \    dsc_section = {\"data\": {}, \"error\": \"\"}\n    try:\n        dscs\
+              \ = custom_api.list_cluster_custom_object(\n            group=\"datasciencecluster.opendatahub.io\"\
+              ,\n            version=\"v1\",\n            plural=\"datascienceclusters\"\
+              \n        )\n        for dsc in dscs.get(\"items\", []):\n            name\
+              \ = dsc.get(\"metadata\", {}).get(\"name\", \"unknown\")\n            status\
+              \ = dsc.get(\"status\", {})\n            dsc_section[\"data\"][name] = {\n\
+              \                \"conditions\": [\n                    {\"type\": c.get(\"\
+              type\", \"\"), \"status\": c.get(\"status\", \"\"), \"reason\": c.get(\"\
+              reason\", \"\"), \"message\": c.get(\"message\", \"\")}\n              \
+              \      for c in status.get(\"conditions\", [])\n                ],\n   \
+              \             \"installedComponents\": status.get(\"installedComponents\"\
+              , {}),\n                \"phase\": status.get(\"phase\", \"\")\n       \
+              \     }\n    except Exception as e:\n        dsc_section[\"error\"] = f\"\
+              Failed to get DSC conditions: {str(e)}\"\n    report[\"dsc_conditions\"\
+              ] = dsc_section\n\n    # 4. DSCI conditions\n    dsci_section = {\"data\"\
+              : {}, \"error\": \"\"}\n    try:\n        dscis = custom_api.list_cluster_custom_object(\n\
+              \            group=\"dscinitialization.opendatahub.io\",\n            version=\"\
+              v1\",\n            plural=\"dscinitializations\"\n        )\n        for\
+              \ dsci in dscis.get(\"items\", []):\n            name = dsci.get(\"metadata\"\
+              , {}).get(\"name\", \"unknown\")\n            status = dsci.get(\"status\"\
+              , {})\n            dsci_section[\"data\"][name] = {\n                \"\
+              conditions\": [\n                    {\"type\": c.get(\"type\", \"\"), \"\
+              status\": c.get(\"status\", \"\"), \"reason\": c.get(\"reason\", \"\"),\
+              \ \"message\": c.get(\"message\", \"\")}\n                    for c in status.get(\"\
+              conditions\", [])\n                ],\n                \"phase\": status.get(\"\
+              phase\", \"\")\n            }\n    except Exception as e:\n        dsci_section[\"\
+              error\"] = f\"Failed to get DSCI conditions: {str(e)}\"\n    report[\"dsci_conditions\"\
+              ] = dsci_section\n\n    # 5. Resource pressure: pods with high restart counts\
+              \ or OOMKilled\n    pressure_section = {\"data\": [], \"error\": \"\"}\n\
+              \    namespaces = [\"opendatahub-operator-system\", \"opendatahub\", \"\
+              redhat-ods-operator\", \"redhat-ods-applications\"]\n    try:\n        for\
+              \ ns in namespaces:\n            try:\n                ns_pods = v1.list_namespaced_pod(namespace=ns)\n\
+              \            except Exception:\n                continue\n            for\
+              \ pod in ns_pods.items:\n                pod_issues = []\n             \
+              \   for cs in (pod.status.container_statuses or []):\n                 \
+              \   if cs.restart_count > 3:\n                        pod_issues.append(f\"\
+              container '{cs.name}' restarted {cs.restart_count} times\")\n          \
+              \          if cs.last_state and cs.last_state.terminated:\n            \
+              \            if cs.last_state.terminated.reason == \"OOMKilled\":\n    \
+              \                        pod_issues.append(f\"container '{cs.name}' was\
+              \ OOMKilled\")\n                    if cs.state and cs.state.waiting and\
+              \ cs.state.waiting.reason in (\"CrashLoopBackOff\", \"ImagePullBackOff\"\
+              , \"ErrImagePull\"):\n                        pod_issues.append(f\"container\
+              \ '{cs.name}' in {cs.state.waiting.reason}\")\n                if pod_issues:\n\
+              \                    pressure_section[\"data\"].append({\n             \
+              \           \"namespace\": ns,\n                        \"pod\": pod.metadata.name,\n\
+              \                        \"phase\": pod.status.phase,\n                \
+              \        \"issues\": pod_issues\n                    })\n    except Exception\
+              \ as e:\n        pressure_section[\"error\"] = f\"Failed to collect resource\
+              \ pressure data: {str(e)}\"\n    report[\"resource_pressure\"] = pressure_section\n\
+              \n    # 6. Operator deployment info\n    deploy_section = {\"data\": {},\
+              \ \"error\": \"\"}\n    try:\n        dep = apps_v1.read_namespaced_deployment(\n\
+              \            name=\"opendatahub-operator-controller-manager\",\n       \
+              \     namespace=\"opendatahub-operator-system\"\n        )\n        containers\
+              \ = dep.spec.template.spec.containers or []\n        deploy_section[\"data\"\
+              ] = {\n            \"ready_replicas\": dep.status.ready_replicas or 0,\n\
+              \            \"desired_replicas\": dep.spec.replicas or 1,\n           \
+              \ \"images\": [c.image for c in containers],\n            \"created\": dep.metadata.creation_timestamp.isoformat()\
+              \ if dep.metadata.creation_timestamp else \"\"\n        }\n    except Exception\
+              \ as e:\n        deploy_section[\"error\"] = f\"Failed to get operator deployment:\
+              \ {str(e)}\"\n    report[\"operator_deployment\"] = deploy_section\n\n \
+              \   return json.dumps(report)\n\n"
             image: registry.access.redhat.com/ubi9/python-311:latest
         exec-generate-report:
           container:
@@ -196,37 +433,156 @@ data:
             command:
             - sh
             - -c
-            - |
-              if ! [ -x "$(command -v pip)" ]; then
-                  python3 -m ensurepip || python3 -m ensurepip --user || apt-get install python3-pip
-              fi
-              PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location 'kfp==2.16.0' '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<"3.9"' && "$0" "$@"
+            - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+              \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+              \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.16.0'\
+              \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
+              $0\" \"$@\"\n"
             - sh
             - -ec
-            - |
-              program_path=$(mktemp -d)
-              printf "%s" "$0" > "$program_path/ephemeral_component.py"
-              _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main --component_module_path "$program_path/ephemeral_component.py" "$@"
-            - |
-              import kfp
-              from kfp import dsl
-              from kfp.dsl import *
-              from typing import *
+            - 'program_path=$(mktemp -d)
 
-              def generate_report(analysis: str) -> str:
-                  """Formats the final report. Could later be expanded to post to Slack/Github."""
-                  print("=== OpenDataHub AI Health Analysis Report ===")
-                  print(analysis)
-                  print("=============================================")
-                  return analysis
+
+              printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+              _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+              '
+            - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+              \ *\n\ndef generate_report(issue_report: str, llm_analysis: str) -> str:\n\
+              \    \"\"\"Generates a structured markdown health report combining deterministic\
+              \ analysis and LLM interpretation.\"\"\"\n    import json\n\n    issues\
+              \ = json.loads(issue_report)\n    by_severity = issues.get(\"issues_by_severity\"\
+              , {})\n    overall_healthy = issues.get(\"overall_healthy\", True)\n   \
+              \ timestamp = issues.get(\"timestamp\", \"unknown\")\n    operator_version\
+              \ = issues.get(\"operator_version\", \"unknown\")\n\n    status = \"HEALTHY\"\
+              \ if overall_healthy else \"ISSUES FOUND\"\n\n    lines = []\n    lines.append(f\"\
+              # ODH Cluster Health Report\")\n    lines.append(f\"**Run:** {timestamp}\
+              \ | **Status:** {status} | **Operator:** {operator_version}\")\n    lines.append(\"\
+              \")\n\n    lines.append(f\"## Summary\")\n    lines.append(f\"{issues.get('summary',\
+              \ 'No data')}\")\n    lines.append(\"\")\n\n    for severity in [\"critical\"\
+              , \"high\", \"medium\", \"low\"]:\n        sev_issues = by_severity.get(severity,\
+              \ [])\n        if not sev_issues:\n            continue\n\n        lines.append(f\"\
+              ## {severity.upper()} Issues\")\n        lines.append(\"\")\n        for\
+              \ issue in sev_issues:\n            lines.append(f\"### {issue['summary']}\"\
+              )\n            lines.append(f\"**Section:** {issue['section']}\")\n\n  \
+              \          if issue.get(\"correlated_signals\"):\n                lines.append(\"\
+              **Correlated signals:**\")\n                for signal in issue[\"correlated_signals\"\
+              ]:\n                    lines.append(f\"- [{signal['source']}] {signal['detail']}\"\
+              )\n            lines.append(\"\")\n\n    healthy = issues.get(\"healthy_sections\"\
+              , [])\n    if healthy:\n        lines.append(\"## Healthy Systems\")\n \
+              \       lines.append(f\"{', '.join(healthy)} -- operating normally\")\n\
+              \        lines.append(\"\")\n\n    lines.append(\"## AI Analysis\")\n  \
+              \  lines.append(llm_analysis)\n    lines.append(\"\")\n\n    report = \"\
+              \\n\".join(lines)\n\n    print(\"=\" * 60)\n    print(report)\n    print(\"\
+              =\" * 60)\n\n    return report\n\n"
+            image: registry.access.redhat.com/ubi9/python-311:latest
+        exec-interpret-with-llm:
+          container:
+            args:
+            - --executor_input
+            - '{{`{{$}}`}}'
+            - --function_to_execute
+            - interpret_with_llm
+            command:
+            - sh
+            - -c
+            - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+              \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+              \ python3 -m pip install --quiet --no-warn-script-location 'requests'  &&\
+              \  python3 -m pip install --quiet --no-warn-script-location 'kfp==2.16.0'\
+              \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
+              $0\" \"$@\"\n"
+            - sh
+            - -ec
+            - 'program_path=$(mktemp -d)
+
+
+              printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+              _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+              '
+            - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+              \ *\n\ndef interpret_with_llm(issue_report: str, supplementary_data: str,\
+              \ model_name: str, endpoint_url: str) -> str:\n    \"\"\"Sends structured\
+              \ issue report to the LLM for root cause analysis and actionable recommendations.\"\
+              \"\"\n    import requests\n    import json\n\n    def truncate(text, max_chars=2000):\n\
+              \        if len(text) > max_chars:\n            return text[:max_chars]\
+              \ + \"\\n... [truncated]\"\n        return text\n\n    def format_issue(issue):\n\
+              \        lines = [f\"- {issue['summary']}\"]\n        for signal in issue.get(\"\
+              correlated_signals\", []):\n            lines.append(f\"  Correlated: [{signal['source']}]\
+              \ {signal['detail']}\")\n            for item in signal.get(\"data\", [])[:3]:\n\
+              \                if isinstance(item, dict):\n                    lines.append(f\"\
+              \    - {item.get('reason', '')}: {item.get('message', '')[:150]}\")\n  \
+              \              elif isinstance(item, str):\n                    lines.append(f\"\
+              \    - {item[:150]}\")\n        return \"\\n\".join(lines)\n\n    issues\
+              \ = json.loads(issue_report)\n    supplementary = json.loads(supplementary_data)\n\
+              \n    overall_healthy = issues.get(\"overall_healthy\", True)\n    by_severity\
+              \ = issues.get(\"issues_by_severity\", {})\n    critical = by_severity.get(\"\
+              critical\", [])\n    high = by_severity.get(\"high\", [])\n    medium =\
+              \ by_severity.get(\"medium\", [])\n    low = by_severity.get(\"low\", [])\n\
+              \n    log_lines = supplementary.get(\"operator_logs\", {}).get(\"data\"\
+              , [])\n    olm_data = supplementary.get(\"olm_status\", {}).get(\"data\"\
+              , {})\n\n    if overall_healthy and not medium and not low:\n        # Healthy\
+              \ cluster prompt\n        sections = []\n        sections.append(\"You are\
+              \ an expert OpenDataHub and Kubernetes SRE reviewing a healthy cluster.\"\
+              )\n        sections.append(f\"Health summary: {issues.get('summary', 'No\
+              \ issues found')}\")\n        sections.append(f\"Healthy sections: {', '.join(issues.get('healthy_sections',\
+              \ []))}\")\n        sections.append(f\"Operator version: {issues.get('operator_version',\
+              \ 'unknown')}\")\n        sections.append(\"\")\n        if log_lines:\n\
+              \            sections.append(\"OPERATOR LOG ERRORS/WARNINGS (even though\
+              \ cluster is healthy):\")\n            sections.append(truncate(\"\\n\"\
+              .join(log_lines[:15])))\n            sections.append(\"\")\n        if olm_data:\n\
+              \            sections.append(\"OLM STATUS:\")\n            for name, info\
+              \ in olm_data.items():\n                sections.append(f\"- {name}: state={info.get('state',\
+              \ 'unknown')}, csv={info.get('installedCSV', 'unknown')}\")\n          \
+              \  sections.append(\"\")\n        sections.append(\"INSTRUCTIONS:\")\n \
+              \       sections.append(\"The cluster is currently healthy. Review the operator\
+              \ logs and OLM status for:\")\n        sections.append(\"1. Any patterns\
+              \ suggesting emerging issues or degradation trends\")\n        sections.append(\"\
+              2. Warnings that might become problems under load\")\n        sections.append(\"\
+              3. Any configuration improvements worth making\")\n        sections.append(\"\
+              If everything looks clean, say so briefly. Be concise, use markdown bullet\
+              \ points.\")\n        prompt = \"\\n\".join(sections)\n    else:\n     \
+              \   # Issues detected prompt\n        sections = []\n        sections.append(\"\
+              You are an expert OpenDataHub and Kubernetes SRE performing root cause analysis\
+              \ on a cluster.\")\n        sections.append(\"The following issues were\
+              \ found by automated health checks. Analyze them and provide actionable\
+              \ guidance.\\n\")\n        if critical:\n            sections.append(\"\
+              CRITICAL ISSUES (service-impacting):\")\n            for issue in critical:\n\
+              \                sections.append(format_issue(issue))\n            sections.append(\"\
+              \")\n        if high:\n            sections.append(\"HIGH ISSUES (component\
+              \ degradation):\")\n            for issue in high:\n                sections.append(format_issue(issue))\n\
+              \            sections.append(\"\")\n        if medium:\n            sections.append(\"\
+              MEDIUM ISSUES (warnings):\")\n            for issue in medium[:5]:\n   \
+              \             sections.append(f\"- {issue['summary']}\")\n            sections.append(\"\
+              \")\n        if low:\n            sections.append(f\"LOW ISSUES: {len(low)}\
+              \ informational items (no action needed)\")\n            sections.append(\"\
+              \")\n        if log_lines:\n            sections.append(\"OPERATOR LOG ERRORS\
+              \ (sample):\")\n            sections.append(truncate(\"\\n\".join(log_lines[:15])))\n\
+              \            sections.append(\"\")\n        sections.append(\"INSTRUCTIONS:\"\
+              )\n        sections.append(\"For each CRITICAL and HIGH issue:\")\n    \
+              \    sections.append(\"1. Most likely root cause (reference specific error\
+              \ messages and resource names)\")\n        sections.append(\"2. Whether\
+              \ this is likely an operator bug, a configuration error, or an infrastructure\
+              \ problem\")\n        sections.append(\"3. Specific remediation command\
+              \ or action (e.g., oc commands, config changes)\")\n        sections.append(\"\
+              \")\n        sections.append(\"For MEDIUM issues, briefly note which need\
+              \ attention vs which are expected/acceptable.\")\n        sections.append(\"\
+              Be concise. Use markdown bullet points.\")\n        prompt = \"\\n\".join(sections)\n\
+              \n    headers = {\"Content-Type\": \"application/json\"}\n    payload =\
+              \ {\n        \"model\": model_name,\n        \"messages\": [{\"role\": \"\
+              user\", \"content\": prompt}],\n        \"temperature\": 0.2,\n        \"\
+              max_tokens\": 512\n    }\n\n    full_url = f\"{endpoint_url}/v1/chat/completions\"\
+              \n\n    try:\n        response = requests.post(full_url, json=payload, headers=headers,\
+              \ timeout=300)\n        response.raise_for_status()\n        result = response.json()\n\
+              \        return result[\"choices\"][0][\"message\"][\"content\"]\n    except\
+              \ Exception as e:\n        return f\"LLM analysis unavailable: {str(e)}\"\
+              \n\n"
             image: registry.access.redhat.com/ubi9/python-311:latest
         exec-run-health-check:
           container:
-            env:
-            - name: HOME
-              value: /tmp
-            - name: GOPATH
-              value: /tmp/go
             args:
             - --executor_input
             - '{{`{{$}}`}}'
@@ -243,97 +599,130 @@ data:
               PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --user --quiet --no-warn-script-location 'gitpython' 'kubernetes' && python3 -m pip install --user --quiet --no-warn-script-location 'kfp==2.16.0' '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<"3.9"' && export PATH="$HOME/.local/bin:$PATH" && "$0" "$@"
             - sh
             - -ec
-            - |
-              program_path=$(mktemp -d)
-              printf "%s" "$0" > "$program_path/ephemeral_component.py"
-              _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main --component_module_path "$program_path/ephemeral_component.py" "$@"
-            - |
-              import kfp
-              from kfp import dsl
-              from kfp.dsl import *
-              from typing import *
+            - 'program_path=$(mktemp -d)
 
-              def run_health_check() -> str:
-                  """Clones the opendatahub-operator repo and runs the health-check tool."""
-                  import subprocess
-                  import tempfile
-                  import os
-                  work_dir = tempfile.mkdtemp()
-                  repo_url = "https://github.com/opendatahub-io/opendatahub-operator.git"
-                  print(f"Cloning {repo_url} into {work_dir}...")
-                  try:
-                      subprocess.run(
-                          ["git", "clone", "--depth", "1", repo_url, work_dir],
-                          check=True, capture_output=True, text=True
-                      )
-                  except subprocess.CalledProcessError as e:
-                      return f"Failed to clone repository: {e.stderr}"
-                  print("Running health-check tool...")
-                  try:
-                      result = subprocess.run(
-                          ["go", "run", "cmd/health-check/main.go"],
-                          cwd=work_dir, check=False, capture_output=True, text=True
-                      )
-                      output = f"Health Check Exit Code: {result.returncode}\n\nSTDOUT:\n{result.stdout}\n\nSTDERR:\n{result.stderr}"
-                      return output
-                  except Exception as e:
-                      return f"Failed to execute health check tool: {str(e)}"
+
+              printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+              _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+              '
+            - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+              \ *\n\ndef run_health_check() -> str:\n    \"\"\"Clones the opendatahub-operator\
+              \ repo and runs the health-check tool with JSON output.\"\"\"\n    import\
+              \ subprocess\n    import tempfile\n    import json\n\n    work_dir = tempfile.mkdtemp()\n\
+              \    repo_url = \"https://github.com/opendatahub-io/opendatahub-operator.git\"\
+              \n\n    print(f\"Cloning {repo_url} into {work_dir}...\")\n    try:\n  \
+              \      subprocess.run(\n            [\"git\", \"clone\", \"--depth\", \"\
+              1\", repo_url, work_dir],\n            check=True,\n            capture_output=True,\n\
+              \            text=True\n        )\n    except subprocess.CalledProcessError\
+              \ as e:\n        return json.dumps({\n            \"exit_code\": -1,\n \
+              \           \"report\": None,\n            \"stderr\": f\"Failed to clone\
+              \ repository: {e.stderr}\"\n        })\n\n    print(\"Running health-check\
+              \ tool with -json output...\")\n    try:\n        result = subprocess.run(\n\
+              \            [\"go\", \"run\", \"cmd/health-check/main.go\", \"-json\"],\n\
+              \            cwd=work_dir,\n            check=False,\n            capture_output=True,\n\
+              \            text=True,\n            timeout=300\n        )\n\n        report\
+              \ = None\n        if result.stdout.strip():\n            try:\n        \
+              \        report = json.loads(result.stdout)\n            except json.JSONDecodeError:\n\
+              \                report = {\"raw_output\": result.stdout}\n\n        stderr_lines\
+              \ = [\n            line for line in result.stderr.splitlines()\n       \
+              \     if not line.startswith(\"go: downloading\")\n        ]\n\n       \
+              \ return json.dumps({\n            \"exit_code\": result.returncode,\n \
+              \           \"report\": report,\n            \"stderr\": \"\\n\".join(stderr_lines)\n\
+              \        })\n    except subprocess.TimeoutExpired:\n        return json.dumps({\n\
+              \            \"exit_code\": -2,\n            \"report\": None,\n       \
+              \     \"stderr\": \"Health check timed out after 300 seconds\"\n       \
+              \ })\n    except Exception as e:\n        return json.dumps({\n        \
+              \    \"exit_code\": -1,\n            \"report\": None,\n            \"stderr\"\
+              : f\"Failed to execute health check tool: {str(e)}\"\n        })\n\n"
+            env:
+            - name: HOME
+              value: /tmp
+            - name: GOPATH
+              value: /tmp/go
             image: registry.access.redhat.com/ubi9/go-toolset:latest
     pipelineInfo:
-      description: Collects ODH logs, runs health check, analyzes with a local LLM, and generates a health report.
-      name: odh-in-cluster-ci-analyzer
+      description: 'Structured ODH cluster health analysis: collects health data, performs
+        deterministic issue analysis, then uses an LLM for root cause interpretation.'
+      name: odh-cluster-analyzer
     root:
       dag:
         tasks:
-          analyze-data:
+          analyze-issues:
             cachingOptions:
-              enableCache: false
+                  enableCache: false
             componentRef:
-              name: comp-analyze-data
+              name: comp-analyze-issues
             dependentTasks:
-            - collect-cluster-state
+            - collect-supplementary-data
             - run-health-check
             inputs:
               parameters:
-                cluster_data:
-                  taskOutputParameter:
-                    outputParameterKey: Output
-                    producerTask: collect-cluster-state
-                endpoint_url:
-                  componentInputParameter: endpoint_url
-                health_check_output:
+                health_data:
                   taskOutputParameter:
                     outputParameterKey: Output
                     producerTask: run-health-check
-                model_name:
-                  componentInputParameter: model_name
+                supplementary_data:
+                  taskOutputParameter:
+                    outputParameterKey: Output
+                    producerTask: collect-supplementary-data
             taskInfo:
-              name: analyze-data
-          collect-cluster-state:
+              name: analyze-issues
+          collect-supplementary-data:
             cachingOptions:
-              enableCache: false
+                  enableCache: false
             componentRef:
-              name: comp-collect-cluster-state
+              name: comp-collect-supplementary-data
             taskInfo:
-              name: collect-cluster-state
+              name: collect-supplementary-data
           generate-report:
             cachingOptions:
-              enableCache: false
+                  enableCache: false
             componentRef:
               name: comp-generate-report
             dependentTasks:
-            - analyze-data
+            - analyze-issues
+            - interpret-with-llm
             inputs:
               parameters:
-                analysis:
+                issue_report:
                   taskOutputParameter:
                     outputParameterKey: Output
-                    producerTask: analyze-data
+                    producerTask: analyze-issues
+                llm_analysis:
+                  taskOutputParameter:
+                    outputParameterKey: Output
+                    producerTask: interpret-with-llm
             taskInfo:
               name: generate-report
+          interpret-with-llm:
+            cachingOptions:
+                  enableCache: false
+            componentRef:
+              name: comp-interpret-with-llm
+            dependentTasks:
+            - analyze-issues
+            - collect-supplementary-data
+            inputs:
+              parameters:
+                endpoint_url:
+                  componentInputParameter: endpoint_url
+                issue_report:
+                  taskOutputParameter:
+                    outputParameterKey: Output
+                    producerTask: analyze-issues
+                model_name:
+                  componentInputParameter: model_name
+                supplementary_data:
+                  taskOutputParameter:
+                    outputParameterKey: Output
+                    producerTask: collect-supplementary-data
+            taskInfo:
+              name: interpret-with-llm
           run-health-check:
             cachingOptions:
-              enableCache: false
+                  enableCache: false
             componentRef:
               name: comp-run-health-check
             taskInfo:
@@ -350,3 +739,4 @@ data:
             parameterType: STRING
     schemaVersion: 2.1.0
     sdkVersion: kfp-2.16.0
+
