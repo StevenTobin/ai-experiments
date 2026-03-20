@@ -8,7 +8,7 @@ ODH_GITOPS_DIR="/home/stobin/git/odh-gitops"
 # 1. Install ArgoCD
 echo "Installing ArgoCD..."
 oc create namespace argocd || true
-oc apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+oc apply -n argocd --server-side --force-conflicts -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
 
 echo "Waiting for ArgoCD server to be ready..."
 oc wait --for=condition=Available deployment/argocd-server -n argocd --timeout=300s
