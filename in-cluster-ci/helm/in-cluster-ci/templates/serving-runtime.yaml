@@ -20,7 +20,7 @@ spec:
         - "8080"
         - "--trust-remote-code"
         - "--max-batch-prefill-tokens"
-        - "1024"
+        - "4096"
       ports:
         - containerPort: 8080
           protocol: TCP
