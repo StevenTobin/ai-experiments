@@ -1,0 +1,299 @@
+# PIPELINE DEFINITION
+# Name: odh-in-cluster-ci-analyzer
+# Description: Collects ODH logs, runs health check, analyzes with a local LLM, and generates a health report.
+# Inputs:
+#    endpoint_url: str [Default: 'http://analyzer-llm-predictor.in-cluster-ci.svc.cluster.local:8080']
+#    model_name: str [Default: 'Qwen/Qwen2.5-0.5B-Instruct']
+components:
+  comp-analyze-data:
+    executorLabel: exec-analyze-data
+    inputDefinitions:
+      parameters:
+        cluster_data:
+          parameterType: STRING
+        endpoint_url:
+          parameterType: STRING
+        health_check_output:
+          parameterType: STRING
+        model_name:
+          parameterType: STRING
+    outputDefinitions:
+      parameters:
+        Output:
+          parameterType: STRING
+  comp-collect-cluster-state:
+    executorLabel: exec-collect-cluster-state
+    outputDefinitions:
+      parameters:
+        Output:
+          parameterType: STRING
+  comp-generate-report:
+    executorLabel: exec-generate-report
+    inputDefinitions:
+      parameters:
+        analysis:
+          parameterType: STRING
+    outputDefinitions:
+      parameters:
+        Output:
+          parameterType: STRING
+  comp-run-health-check:
+    executorLabel: exec-run-health-check
+    outputDefinitions:
+      parameters:
+        Output:
+          parameterType: STRING
+deploymentSpec:
+  executors:
+    exec-analyze-data:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - analyze_data
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'requests'  &&\
+          \  python3 -m pip install --quiet --no-warn-script-location 'kfp==2.16.0'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
+          $0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef analyze_data(cluster_data: str, health_check_output: str, model_name:\
+          \ str, endpoint_url: str) -> str:\n    \"\"\"Sends the collected data to\
+          \ the locally served LLM for analysis.\"\"\"\n    import requests\n    import\
+          \ json\n\n    # We construct the prompt instructing the LLM to act as an\
+          \ SRE\n    prompt = f\"\"\"\n    You are an expert Kubernetes and OpenDataHub\
+          \ Site Reliability Engineer.\n    Please review the following cluster state,\
+          \ recent operator logs, and health check output.\n    Identify any potential\
+          \ issues, bugs, or misconfigurations, and provide recommendations.\n\n \
+          \   Cluster Data:\n    {cluster_data}\n\n    Health Check Output:\n    {health_check_output}\n\
+          \n    Provide your analysis in Markdown format.\n    \"\"\"\n\n    headers\
+          \ = {\"Content-Type\": \"application/json\"}\n    payload = {\n        \"\
+          model\": model_name,\n        \"messages\": [{\"role\": \"user\", \"content\"\
+          : prompt}],\n        \"temperature\": 0.2,\n        \"max_tokens\": 1000\n\
+          \    }\n\n    # We expect the vLLM server to be exposed at the given endpoint\n\
+          \    # E.g., http://analyzer-llm.in-cluster-ci.svc.cluster.local:8080/v1/chat/completions\n\
+          \    full_url = f\"{endpoint_url}/v1/chat/completions\"\n\n    try:\n  \
+          \      response = requests.post(full_url, json=payload, headers=headers)\n\
+          \        response.raise_for_status()\n        result = response.json()\n\
+          \        return result[\"choices\"][0][\"message\"][\"content\"]\n    except\
+          \ Exception as e:\n        return f\"Failed to get analysis from LLM: {str(e)}\\\
+          nResponse: {response.text if 'response' in locals() else 'None'}\"\n\n"
+        image: registry.access.redhat.com/ubi9/python-311:latest
+    exec-collect-cluster-state:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - collect_cluster_state
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'kubernetes'\
+          \ 'requests'  &&  python3 -m pip install --quiet --no-warn-script-location\
+          \ 'kfp==2.16.0' '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"\
+          3.9\"' && \"$0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef collect_cluster_state() -> str:\n    \"\"\"Collects logs and\
+          \ status from the OpenDataHub operator.\"\"\"\n    from kubernetes import\
+          \ client, config\n    import json\n    import os\n\n    # In-cluster config\n\
+          \    try:\n        config.load_incluster_config()\n    except Exception\
+          \ as e:\n        return f\"Error loading config: {str(e)}\"\n\n    v1 =\
+          \ client.CoreV1Api()\n    custom_api = client.CustomObjectsApi()\n\n   \
+          \ report = {\"logs\": \"\", \"components\": {}}\n\n    # 1. Get ODH Operator\
+          \ Logs\n    try:\n        pods = v1.list_namespaced_pod(\n            namespace=\"\
+          opendatahub-operator-system\",\n            label_selector=\"name=opendatahub-operator\"\
+          \n        )\n        if pods.items:\n            pod_name = pods.items[0].metadata.name\n\
+          \            logs = v1.read_namespaced_pod_log(\n                name=pod_name,\
+          \ \n                namespace=\"opendatahub-operator-system\",\n       \
+          \         tail_lines=200\n            )\n            report[\"logs\"] =\
+          \ logs\n    except Exception as e:\n        report[\"logs\"] = f\"Failed\
+          \ to get logs: {str(e)}\"\n\n    # 2. Get DSC Status\n    try:\n       \
+          \ dsc = custom_api.get_cluster_custom_object(\n            group=\"datasciencecluster.opendatahub.io\"\
+          ,\n            version=\"v1\",\n            plural=\"datascienceclusters\"\
+          ,\n            name=\"default-dsc\"\n        )\n        if \"status\" in\
+          \ dsc and \"installedComponents\" in dsc[\"status\"]:\n            report[\"\
+          components\"] = dsc[\"status\"][\"installedComponents\"]\n    except Exception\
+          \ as e:\n        report[\"components\"] = {\"error\": f\"Failed to get DSC:\
+          \ {str(e)}\"}\n\n    return json.dumps(report)\n\n"
+        image: registry.access.redhat.com/ubi9/python-311:latest
+    exec-generate-report:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - generate_report
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.16.0'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
+          $0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef generate_report(analysis: str) -> str:\n    \"\"\"Formats the\
+          \ final report. Could later be expanded to post to Slack/Github.\"\"\"\n\
+          \    print(\"=== OpenDataHub AI Health Analysis Report ===\")\n    print(analysis)\n\
+          \    print(\"=============================================\")\n    return\
+          \ analysis\n\n"
+        image: registry.access.redhat.com/ubi9/python-311:latest
+    exec-run-health-check:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - run_health_check
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'gitpython' 'kubernetes'\
+          \  &&  python3 -m pip install --quiet --no-warn-script-location 'kfp==2.16.0'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
+          $0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef run_health_check() -> str:\n    \"\"\"Clones the opendatahub-operator\
+          \ repo and runs the health-check tool.\"\"\"\n    import subprocess\n  \
+          \  import tempfile\n    import os\n\n    # We need to make sure we have\
+          \ a temp dir to clone into\n    work_dir = tempfile.mkdtemp()\n    repo_url\
+          \ = \"https://github.com/opendatahub-io/opendatahub-operator.git\"\n\n \
+          \   print(f\"Cloning {repo_url} into {work_dir}...\")\n    try:\n      \
+          \  subprocess.run(\n            [\"git\", \"clone\", \"--depth\", \"1\"\
+          , repo_url, work_dir],\n            check=True,\n            capture_output=True,\n\
+          \            text=True\n        )\n    except subprocess.CalledProcessError\
+          \ as e:\n        return f\"Failed to clone repository: {e.stderr}\"\n\n\
+          \    print(\"Running health-check tool...\")\n    # The health check tool\
+          \ needs KUBECONFIG or incluster config.\n    # By default, client-go uses\
+          \ incluster config if running in a pod.\n    try:\n        # We need to\
+          \ run `go run cmd/health-check/main.go`\n        result = subprocess.run(\n\
+          \            [\"go\", \"run\", \"cmd/health-check/main.go\"],\n        \
+          \    cwd=work_dir,\n            check=False,  # Don't throw exception on\
+          \ non-zero exit, we want the output\n            capture_output=True,\n\
+          \            text=True\n        )\n\n        output = f\"Health Check Exit\
+          \ Code: {result.returncode}\\n\\nSTDOUT:\\n{result.stdout}\\n\\nSTDERR:\\\
+          n{result.stderr}\"\n        return output\n    except Exception as e:\n\
+          \        return f\"Failed to execute health check tool: {str(e)}\"\n\n"
+        image: registry.access.redhat.com/ubi9/go-toolset:latest
+pipelineInfo:
+  description: Collects ODH logs, runs health check, analyzes with a local LLM, and
+    generates a health report.
+  name: odh-in-cluster-ci-analyzer
+root:
+  dag:
+    tasks:
+      analyze-data:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-analyze-data
+        dependentTasks:
+        - collect-cluster-state
+        - run-health-check
+        inputs:
+          parameters:
+            cluster_data:
+              taskOutputParameter:
+                outputParameterKey: Output
+                producerTask: collect-cluster-state
+            endpoint_url:
+              componentInputParameter: endpoint_url
+            health_check_output:
+              taskOutputParameter:
+                outputParameterKey: Output
+                producerTask: run-health-check
+            model_name:
+              componentInputParameter: model_name
+        taskInfo:
+          name: analyze-data
+      collect-cluster-state:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-collect-cluster-state
+        taskInfo:
+          name: collect-cluster-state
+      generate-report:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-generate-report
+        dependentTasks:
+        - analyze-data
+        inputs:
+          parameters:
+            analysis:
+              taskOutputParameter:
+                outputParameterKey: Output
+                producerTask: analyze-data
+        taskInfo:
+          name: generate-report
+      run-health-check:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-run-health-check
+        taskInfo:
+          name: run-health-check
+  inputDefinitions:
+    parameters:
+      endpoint_url:
+        defaultValue: http://analyzer-llm-predictor.in-cluster-ci.svc.cluster.local:8080
+        isOptional: true
+        parameterType: STRING
+      model_name:
+        defaultValue: Qwen/Qwen2.5-0.5B-Instruct
+        isOptional: true
+        parameterType: STRING
+schemaVersion: 2.1.0
+sdkVersion: kfp-2.16.0

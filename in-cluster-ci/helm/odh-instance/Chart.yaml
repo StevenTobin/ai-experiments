@@ -1,6 +1,0 @@
-apiVersion: v2
-name: odh-instance
-description: A Helm chart for deploying OpenDataHub DSCI and DSC
-type: application
-version: 0.1.0
-appVersion: "1.0.0"

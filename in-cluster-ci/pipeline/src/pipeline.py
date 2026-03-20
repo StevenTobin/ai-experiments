@@ -12,7 +12,7 @@ from components.report import generate_report
     description="Collects ODH logs, runs health check, analyzes with a local LLM, and generates a health report."
 )
 def analyzer_pipeline(
-    model_name: str = "llama-3-8b-instruct",
+    model_name: str = "Qwen/Qwen2.5-0.5B-Instruct",
     endpoint_url: str = "http://analyzer-llm-predictor.in-cluster-ci.svc.cluster.local:8080"
 ):
     # Step 1: Collect Data

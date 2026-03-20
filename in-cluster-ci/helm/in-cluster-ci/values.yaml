@@ -1,7 +1,7 @@
 # Default values for in-cluster-ci.
 
 model:
-  name: "Qwen/Qwen2.5-0.5B-Instruct" # Using a much smaller model for default testing without needing a large GPU
+  name: "Qwen/Qwen2.5-0.5B-Instruct"
   resources:
     limits:
       memory: "8Gi"
@@ -12,7 +12,3 @@ pipeline:
   name: "odh-analyzer-pipeline"
   schedule: "0 0 * * *" # Daily at midnight
   namespace: "in-cluster-ci"
-
-setupJob:
-  image: "registry.access.redhat.com/ubi9/python-311:latest" # Base python image to build pipeline
-  backoffLimit: 4
