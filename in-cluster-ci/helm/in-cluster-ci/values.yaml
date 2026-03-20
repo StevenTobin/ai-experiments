@@ -4,10 +4,8 @@ model:
   name: "Qwen/Qwen2.5-0.5B-Instruct" # Using a much smaller model for default testing without needing a large GPU
   resources:
     limits:
-      nvidia.com/gpu: "1"
       memory: "8Gi"
     requests:
-      nvidia.com/gpu: "1"
       memory: "8Gi"
 
 pipeline:
