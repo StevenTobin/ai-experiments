@@ -43,7 +43,7 @@ spec:
               import time
               from kfp.client import Client
               
-              # DSPA in ODH exposes ml-pipeline.{{namespace}}.svc.cluster.local:8888
+              # DSPA in ODH exposes ml-pipeline.NAMESPACE.svc.cluster.local:8888
               DSP_NAMESPACE = "{{ .Values.pipeline.namespace }}"
               KFP_ENDPOINT = f"http://ds-pipeline-dspa.{DSP_NAMESPACE}.svc.cluster.local:8888"
               
