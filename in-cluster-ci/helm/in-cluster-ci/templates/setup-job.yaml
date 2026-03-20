@@ -1,7 +1,7 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: submit-analyzer-pipeline-run
+  name: submit-analyzer-pipeline-run-2
   annotations:
     # Run this after the configmap and RBAC are created
     helm.sh/hook: post-install,post-upgrade
