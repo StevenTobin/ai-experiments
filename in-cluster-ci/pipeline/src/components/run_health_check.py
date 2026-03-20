@@ -46,6 +46,14 @@ def run_health_check() -> str:
             except json.JSONDecodeError:
                 report = {"raw_output": result.stdout}
 
+        if isinstance(report, dict):
+            for section_key in ("nodes", "deployments", "pods", "events", "quotas", "operator", "dsci", "dsc"):
+                section = report.get(section_key)
+                if isinstance(section, dict):
+                    section_data = section.get("data")
+                    if isinstance(section_data, dict) and "data" in section_data:
+                        del section_data["data"]
+
         stderr_lines = [
             line for line in result.stderr.splitlines()
             if not line.startswith("go: downloading")

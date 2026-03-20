@@ -623,11 +623,17 @@ deploymentSpec:
           \            text=True,\n            timeout=300\n        )\n\n        report\
           \ = None\n        if result.stdout.strip():\n            try:\n        \
           \        report = json.loads(result.stdout)\n            except json.JSONDecodeError:\n\
-          \                report = {\"raw_output\": result.stdout}\n\n        stderr_lines\
-          \ = [\n            line for line in result.stderr.splitlines()\n       \
-          \     if not line.startswith(\"go: downloading\")\n        ]\n\n       \
-          \ return json.dumps({\n            \"exit_code\": result.returncode,\n \
-          \           \"report\": report,\n            \"stderr\": \"\\n\".join(stderr_lines)\n\
+          \                report = {\"raw_output\": result.stdout}\n\n        if\
+          \ isinstance(report, dict):\n            for section_key in (\"nodes\",\
+          \ \"deployments\", \"pods\", \"events\", \"quotas\", \"operator\", \"dsci\"\
+          , \"dsc\"):\n                section = report.get(section_key)\n       \
+          \         if isinstance(section, dict):\n                    section_data\
+          \ = section.get(\"data\")\n                    if isinstance(section_data,\
+          \ dict) and \"data\" in section_data:\n                        del section_data[\"\
+          data\"]\n\n        stderr_lines = [\n            line for line in result.stderr.splitlines()\n\
+          \            if not line.startswith(\"go: downloading\")\n        ]\n\n\
+          \        return json.dumps({\n            \"exit_code\": result.returncode,\n\
+          \            \"report\": report,\n            \"stderr\": \"\\n\".join(stderr_lines)\n\
           \        })\n    except subprocess.TimeoutExpired:\n        return json.dumps({\n\
           \            \"exit_code\": -2,\n            \"report\": None,\n       \
           \     \"stderr\": \"Health check timed out after 300 seconds\"\n       \

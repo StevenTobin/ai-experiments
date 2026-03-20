@@ -77,3 +77,25 @@ subjects:
   - kind: ServiceAccount
     name: pipeline-runner-ds-pipeline
     namespace: {{ .Values.pipeline.namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: in-cluster-ci-workflow-configmaps
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["create", "get", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: in-cluster-ci-workflow-configmaps-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: in-cluster-ci-workflow-configmaps
+subjects:
+  - kind: ServiceAccount
+    name: ds-pipeline-workflow-controller-ds-pipeline
+    namespace: {{ .Values.pipeline.namespace }}

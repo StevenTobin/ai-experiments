@@ -2,10 +2,14 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: analyzer-pipeline-spec
-  annotations:
-    argocd.argoproj.io/sync-wave: "2"
 data:
   analyzer_pipeline.yaml: |
+    # PIPELINE DEFINITION
+    # Name: odh-cluster-analyzer
+    # Description: Structured ODH cluster health analysis: collects health data, performs deterministic issue analysis, then uses an LLM for root cause interpretation.
+    # Inputs:
+    #    endpoint_url: str [Default: 'http://analyzer-llm-predictor.in-cluster-ci.svc.cluster.local:8080']
+    #    model_name: str [Default: 'Qwen2.5-Coder-3B-Instruct']
     components:
       comp-analyze-issues:
         executorLabel: exec-analyze-issues
@@ -65,7 +69,7 @@ data:
           container:
             args:
             - --executor_input
-            - '{{`{{$}}`}}'
+            - '{{"{{"{{"}}"}}${{"}}"}}'
             - --function_to_execute
             - analyze_issues
             command:
@@ -79,12 +83,12 @@ data:
             - sh
             - -ec
             - 'program_path=$(mktemp -d)
-
-
+    
+    
               printf "%s" "$0" > "$program_path/ephemeral_component.py"
-
+    
               _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
-
+    
               '
             - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
               \ *\n\ndef analyze_issues(health_data: str, supplementary_data: str) ->\
@@ -297,7 +301,7 @@ data:
           container:
             args:
             - --executor_input
-            - '{{`{{$}}`}}'
+            - '{{"{{"{{"}}"}}${{"}}"}}'
             - --function_to_execute
             - collect_supplementary_data
             command:
@@ -312,12 +316,12 @@ data:
             - sh
             - -ec
             - 'program_path=$(mktemp -d)
-
-
+    
+    
               printf "%s" "$0" > "$program_path/ephemeral_component.py"
-
+    
               _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
-
+    
               '
             - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
               \ *\n\ndef collect_supplementary_data() -> str:\n    \"\"\"Collects data\
@@ -427,7 +431,7 @@ data:
           container:
             args:
             - --executor_input
-            - '{{`{{$}}`}}'
+            - '{{"{{"{{"}}"}}${{"}}"}}'
             - --function_to_execute
             - generate_report
             command:
@@ -441,12 +445,12 @@ data:
             - sh
             - -ec
             - 'program_path=$(mktemp -d)
-
-
+    
+    
               printf "%s" "$0" > "$program_path/ephemeral_component.py"
-
+    
               _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
-
+    
               '
             - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
               \ *\n\ndef generate_report(issue_report: str, llm_analysis: str) -> str:\n\
@@ -481,7 +485,7 @@ data:
           container:
             args:
             - --executor_input
-            - '{{`{{$}}`}}'
+            - '{{"{{"{{"}}"}}${{"}}"}}'
             - --function_to_execute
             - interpret_with_llm
             command:
@@ -496,12 +500,12 @@ data:
             - sh
             - -ec
             - 'program_path=$(mktemp -d)
-
-
+    
+    
               printf "%s" "$0" > "$program_path/ephemeral_component.py"
-
+    
               _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
-
+    
               '
             - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
               \ *\n\ndef interpret_with_llm(issue_report: str, supplementary_data: str,\
@@ -585,27 +589,27 @@ data:
           container:
             args:
             - --executor_input
-            - '{{`{{$}}`}}'
+            - '{{"{{"{{"}}"}}${{"}}"}}'
             - --function_to_execute
             - run_health_check
             command:
             - sh
             - -c
-            - |
-              export HOME=/tmp
-              if ! [ -x "$(command -v pip)" ]; then
-                  python3 -m ensurepip --user || true
-              fi
-              PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --user --quiet --no-warn-script-location 'gitpython' 'kubernetes' && python3 -m pip install --user --quiet --no-warn-script-location 'kfp==2.16.0' '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<"3.9"' && export PATH="$HOME/.local/bin:$PATH" && "$0" "$@"
+            - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+              \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+              \ python3 -m pip install --quiet --no-warn-script-location 'gitpython' 'kubernetes'\
+              \  &&  python3 -m pip install --quiet --no-warn-script-location 'kfp==2.16.0'\
+              \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
+              $0\" \"$@\"\n"
             - sh
             - -ec
             - 'program_path=$(mktemp -d)
-
-
+    
+    
               printf "%s" "$0" > "$program_path/ephemeral_component.py"
-
+    
               _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
-
+    
               '
             - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
               \ *\n\ndef run_health_check() -> str:\n    \"\"\"Clones the opendatahub-operator\
@@ -625,11 +629,17 @@ data:
               \            text=True,\n            timeout=300\n        )\n\n        report\
               \ = None\n        if result.stdout.strip():\n            try:\n        \
               \        report = json.loads(result.stdout)\n            except json.JSONDecodeError:\n\
-              \                report = {\"raw_output\": result.stdout}\n\n        stderr_lines\
-              \ = [\n            line for line in result.stderr.splitlines()\n       \
-              \     if not line.startswith(\"go: downloading\")\n        ]\n\n       \
-              \ return json.dumps({\n            \"exit_code\": result.returncode,\n \
-              \           \"report\": report,\n            \"stderr\": \"\\n\".join(stderr_lines)\n\
+              \                report = {\"raw_output\": result.stdout}\n\n        if\
+              \ isinstance(report, dict):\n            for section_key in (\"nodes\",\
+              \ \"deployments\", \"pods\", \"events\", \"quotas\", \"operator\", \"dsci\"\
+              , \"dsc\"):\n                section = report.get(section_key)\n       \
+              \         if isinstance(section, dict):\n                    section_data\
+              \ = section.get(\"data\")\n                    if isinstance(section_data,\
+              \ dict) and \"data\" in section_data:\n                        del section_data[\"\
+              data\"]\n\n        stderr_lines = [\n            line for line in result.stderr.splitlines()\n\
+              \            if not line.startswith(\"go: downloading\")\n        ]\n\n\
+              \        return json.dumps({\n            \"exit_code\": result.returncode,\n\
+              \            \"report\": report,\n            \"stderr\": \"\\n\".join(stderr_lines)\n\
               \        })\n    except subprocess.TimeoutExpired:\n        return json.dumps({\n\
               \            \"exit_code\": -2,\n            \"report\": None,\n       \
               \     \"stderr\": \"Health check timed out after 300 seconds\"\n       \
@@ -739,4 +749,3 @@ data:
             parameterType: STRING
     schemaVersion: 2.1.0
     sdkVersion: kfp-2.16.0
-
