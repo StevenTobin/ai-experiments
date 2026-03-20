@@ -210,6 +210,11 @@ data:
             image: registry.access.redhat.com/ubi9/python-311:latest
         exec-run-health-check:
           container:
+            env:
+            - name: HOME
+              value: /tmp
+            - name: GOPATH
+              value: /tmp/go
             args:
             - --executor_input
             - '{{`{{$}}`}}'
@@ -219,10 +224,11 @@ data:
             - sh
             - -c
             - |
+              export HOME=/tmp
               if ! [ -x "$(command -v pip)" ]; then
-                  python3 -m ensurepip || python3 -m ensurepip --user || apt-get install python3-pip
+                  python3 -m ensurepip --user || true
               fi
-              PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location 'gitpython' 'kubernetes' && python3 -m pip install --quiet --no-warn-script-location 'kfp==2.16.0' '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<"3.9"' && "$0" "$@"
+              PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --user --quiet --no-warn-script-location 'gitpython' 'kubernetes' && python3 -m pip install --user --quiet --no-warn-script-location 'kfp==2.16.0' '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<"3.9"' && export PATH="$HOME/.local/bin:$PATH" && "$0" "$@"
             - sh
             - -ec
             - |

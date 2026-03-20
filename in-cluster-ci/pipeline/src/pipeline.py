@@ -20,6 +20,8 @@ def analyzer_pipeline(
     
     # Step 1b: Run Health Check
     health_check_task = run_health_check()
+    health_check_task.set_env_variable("HOME", "/tmp")
+    health_check_task.set_env_variable("GOPATH", "/tmp/go")
     
     # Step 2: Analyze Data
     analyze_task = analyze_data(
