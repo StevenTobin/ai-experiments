@@ -2,8 +2,6 @@ apiVersion: serving.kserve.io/v1alpha1
 kind: ServingRuntime
 metadata:
   name: vllm-runtime
-  annotations:
-    opendatahub.io/recommended-accelerators: '["nvidia.com/gpu"]'
 spec:
   supportedModelFormats:
     - name: pytorch
