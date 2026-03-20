@@ -31,5 +31,13 @@ spec:
       env:
         - name: HF_HOME
           value: /tmp/hf_home
+      volumeMounts:
+        - name: shm
+          mountPath: /dev/shm
       resources:
         {{- toYaml .Values.model.resources | nindent 8 }}
+  volumes:
+    - name: shm
+      emptyDir:
+        medium: Memory
+        sizeLimit: 2Gi
