@@ -1,7 +1,7 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: submit-analyzer-pipeline-run-3
+  name: submit-analyzer-pipeline-run-4
   annotations:
     argocd.argoproj.io/sync-wave: "5"
 spec:
