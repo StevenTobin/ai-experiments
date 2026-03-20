@@ -10,25 +10,25 @@ spec:
       version: "1"
   containers:
     - name: kserve-container
-      image: vllm/vllm-openai:v0.4.0
+      image: ghcr.io/huggingface/text-generation-inference:2.4.0-intel-cpu
       command:
-        - "python3"
-        - "-m"
-        - "vllm.entrypoints.openai.api_server"
+        - "text-generation-launcher"
       args:
-        - "--model"
-        - "{{ .Values.model.name }}" # Use the model name directly, vllm will download it from huggingface if not found locally
+        - "--model-id"
+        - "{{ .Values.model.name }}"
         - "--port"
         - "8080"
-        - "--served-model-name"
-        - "{{ .Values.model.name }}"
         - "--trust-remote-code"
+        - "--max-batch-prefill-tokens"
+        - "1024"
       ports:
         - containerPort: 8080
           protocol: TCP
       env:
         - name: HF_HOME
           value: /tmp/hf_home
+        - name: PORT
+          value: "8080"
       volumeMounts:
         - name: shm
           mountPath: /dev/shm
