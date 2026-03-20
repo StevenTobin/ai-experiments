@@ -14,5 +14,5 @@ pipeline:
   namespace: "opendatahub"
 
 setupJob:
-  image: "quay.io/opendatahub/kubeflow-pipelines-kfp-sdk:latest" # Base python image with KFP
+  image: "registry.access.redhat.com/ubi9/python-311:latest" # Base python image
   backoffLimit: 4
