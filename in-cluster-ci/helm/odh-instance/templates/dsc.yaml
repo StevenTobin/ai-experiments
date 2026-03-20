@@ -6,18 +6,10 @@ spec:
   components:
     kserve:
       managementState: Managed
-      serving:
-        ingressGateway:
-          certificate:
-            type: SelfSigned
-        managementState: Managed
-        name: knative-serving
     datasciencepipelines:
       managementState: Managed
     dashboard:
       managementState: Managed
-    codeflarepipelines:
-      managementState: Removed
     kueue:
       managementState: Removed
     modelmeshserving:
