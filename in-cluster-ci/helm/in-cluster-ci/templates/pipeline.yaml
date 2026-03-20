@@ -31,7 +31,7 @@ spec:
               import urllib.error
               import json
               import time
-              import os
+              import hashlib
 
               DSP_API = "http://ds-pipeline-ds-pipeline.{{ .Values.pipeline.namespace }}.svc.cluster.local:8888"
               PIPELINE_NAME = "{{ .Values.pipeline.name }}"
@@ -42,7 +42,7 @@ spec:
                       try:
                           req = urllib.request.Request(f"{DSP_API}/apis/v2beta1/pipelines")
                           urllib.request.urlopen(req, timeout=5)
-                          print(f"DSP API is ready")
+                          print("DSP API is ready")
                           return True
                       except Exception as e:
                           print(f"Waiting for DSP API ({i+1}/{max_retries}): {e}")
@@ -74,7 +74,17 @@ spec:
                   print(f"Created pipeline: {data['pipeline_id']}")
                   return data["pipeline_id"]
 
-              def upload_version(pipeline_id):
+              def get_spec_hash():
+                  with open(PIPELINE_FILE, "rb") as f:
+                      return hashlib.sha256(f.read()).hexdigest()[:12]
+
+              def get_existing_versions(pipeline_id):
+                  req = urllib.request.Request(f"{DSP_API}/apis/v2beta1/pipelines/{pipeline_id}/versions?pageSize=100")
+                  resp = urllib.request.urlopen(req, timeout=10)
+                  data = json.loads(resp.read())
+                  return data.get("pipeline_versions", [])
+
+              def upload_version(pipeline_id, version_name):
                   boundary = "----PipelineUploadBoundary"
                   with open(PIPELINE_FILE, "rb") as f:
                       file_data = f.read()
@@ -86,14 +96,14 @@ spec:
                   ).encode() + file_data + f"\r\n--{boundary}--\r\n".encode()
 
                   req = urllib.request.Request(
-                      f"{DSP_API}/apis/v2beta1/pipelines/upload_version?name=v1&pipelineid={pipeline_id}&description=Initial+version",
+                      f"{DSP_API}/apis/v2beta1/pipelines/upload_version?name={version_name}&pipelineid={pipeline_id}",
                       data=body,
                       headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
                       method="POST"
                   )
                   resp = urllib.request.urlopen(req, timeout=30)
                   data = json.loads(resp.read())
-                  print(f"Uploaded version: {data.get('pipeline_version_id', 'unknown')}")
+                  print(f"Uploaded version '{version_name}': {data.get('pipeline_version_id', 'unknown')}")
                   return data
 
               if not wait_for_api():
@@ -101,9 +111,14 @@ spec:
                   exit(1)
 
               pipeline_id = find_existing_pipeline()
-              if pipeline_id:
-                  print(f"Pipeline already exists: {pipeline_id}")
-              else:
+              if not pipeline_id:
                   pipeline_id = create_pipeline()
-                  upload_version(pipeline_id)
+
+              spec_hash = get_spec_hash()
+              version_name = f"v-{spec_hash}"
+              existing = get_existing_versions(pipeline_id)
+              if any(v.get("display_name") == version_name for v in existing):
+                  print(f"Version '{version_name}' already exists, nothing to do")
+              else:
+                  upload_version(pipeline_id, version_name)
                   print("Pipeline uploaded successfully!")
