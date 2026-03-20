@@ -27,11 +27,15 @@ spec:
       env:
         - name: HF_HOME
           value: /tmp/hf_home
+        - name: HUGGINGFACE_HUB_CACHE
+          value: /tmp/hf_home
         - name: PORT
           value: "8080"
       volumeMounts:
         - name: shm
           mountPath: /dev/shm
+        - name: data
+          mountPath: /data
       resources:
         {{- toYaml .Values.model.resources | nindent 8 }}
   volumes:
@@ -39,3 +43,5 @@ spec:
       emptyDir:
         medium: Memory
         sizeLimit: 2Gi
+    - name: data
+      emptyDir: {}
