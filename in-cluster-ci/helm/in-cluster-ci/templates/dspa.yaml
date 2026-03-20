@@ -1,0 +1,15 @@
+apiVersion: datasciencepipelinesapplications.opendatahub.io/v1
+kind: DataSciencePipelinesApplication
+metadata:
+  name: ds-pipeline
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  dspVersion: v2
+  database:
+    mariaDB:
+      deploy: true
+  objectStorage:
+    minio:
+      deploy: true
+      image: 'quay.io/minio/minio:RELEASE.2023-11-20T22-40-07Z'
