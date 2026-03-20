@@ -8,9 +8,9 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: "https://github.com/YOUR_ORG/in-cluster-ci.git" # REPLACE WITH YOUR REPO URL
+    repoURL: "https://github.com/StevenTobin/ai-experiments.git" # Replaced placeholder with your repo URL
     targetRevision: main
-    path: helm/in-cluster-ci
+    path: in-cluster-ci/helm/in-cluster-ci
   destination:
     server: https://kubernetes.default.svc
     namespace: in-cluster-ci
