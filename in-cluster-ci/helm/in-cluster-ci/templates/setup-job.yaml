@@ -1,11 +1,9 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: submit-analyzer-pipeline-run-2
+  name: submit-analyzer-pipeline-run-3
   annotations:
-    # Run this after the configmap and RBAC are created
-    helm.sh/hook: post-install,post-upgrade
-    helm.sh/hook-weight: "5"
+    argocd.argoproj.io/sync-wave: "5"
 spec:
   backoffLimit: {{ .Values.setupJob.backoffLimit }}
   template:
