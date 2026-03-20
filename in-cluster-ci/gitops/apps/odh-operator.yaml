@@ -10,7 +10,7 @@ spec:
   source:
     repoURL: "https://github.com/opendatahub-io/odh-gitops.git" # Assuming you want to use upstream, or replace with your fork
     targetRevision: main
-    path: operator/base
+    path: .
   destination:
     server: https://kubernetes.default.svc
     namespace: openshift-operators
@@ -19,5 +19,6 @@ spec:
       prune: true
       selfHeal: true
     syncOptions:
-      - CreateNamespace=true
-      - ServerSideApply=true
+    - CreateNamespace=true
+    - ServerSideApply=true
+    - SkipDryRunOnMissingResource=true
