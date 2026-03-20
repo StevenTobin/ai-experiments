@@ -69,7 +69,7 @@ data:
           container:
             args:
             - --executor_input
-            - '{{"{{"{{"}}"}}${{"}}"}}'
+            - '{{ "{{" }}${{ "}}" }}'
             - --function_to_execute
             - analyze_issues
             command:
@@ -301,7 +301,7 @@ data:
           container:
             args:
             - --executor_input
-            - '{{"{{"{{"}}"}}${{"}}"}}'
+            - '{{ "{{" }}${{ "}}" }}'
             - --function_to_execute
             - collect_supplementary_data
             command:
@@ -431,7 +431,7 @@ data:
           container:
             args:
             - --executor_input
-            - '{{"{{"{{"}}"}}${{"}}"}}'
+            - '{{ "{{" }}${{ "}}" }}'
             - --function_to_execute
             - generate_report
             command:
@@ -485,7 +485,7 @@ data:
           container:
             args:
             - --executor_input
-            - '{{"{{"{{"}}"}}${{"}}"}}'
+            - '{{ "{{" }}${{ "}}" }}'
             - --function_to_execute
             - interpret_with_llm
             command:
@@ -589,7 +589,7 @@ data:
           container:
             args:
             - --executor_input
-            - '{{"{{"{{"}}"}}${{"}}"}}'
+            - '{{ "{{" }}${{ "}}" }}'
             - --function_to_execute
             - run_health_check
             command:
