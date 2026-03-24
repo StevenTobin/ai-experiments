@@ -1,9 +1,10 @@
+data/
 __pycache__/
 *.pyc
 *.pyo
 .env
-.env.*
-*.sqlite
-data/
+*.egg-info/
+dist/
+build/
 .venv/
 venv/
