@@ -115,31 +115,49 @@
       }
     },
     {
-      "title": "AI Tool Distribution",
-      "description": "Bar chart showing labeled AI-assisted commits by tool in the selected time window. This is a lower bound per tool.",
-      "type": "bargauge",
+      "title": "AI-Assisted vs Other Commits",
+      "description": "Proportion of commits with labeled AI assistance vs those without, in the selected time window. The 'Other' slice includes both purely human commits AND AI-assisted commits that lack explicit trailers. This is a LOWER BOUND for AI usage — the true AI-assisted share is likely larger.",
+      "type": "piechart",
       "gridPos": { "h": 6, "w": 6, "x": 18, "y": 3 },
       "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
-      "targets": [{
-        "expr": "dora_ai_window_by_tool{window=\"$window\"}",
-        "legendFormat": "{{tool}}",
-        "refId": "A",
-        "instant": true,
-        "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }
-      }],
+      "targets": [
+        {
+          "expr": "dora_ai_window_total{window=\"$window\"}",
+          "legendFormat": "AI-Assisted",
+          "refId": "A",
+          "instant": true,
+          "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }
+        },
+        {
+          "expr": "dora_ai_window_non_ai{window=\"$window\"}",
+          "legendFormat": "Other",
+          "refId": "B",
+          "instant": true,
+          "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }
+        }
+      ],
       "fieldConfig": {
         "defaults": {
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              { "color": "blue", "value": null },
-              { "color": "green", "value": 5 },
-              { "color": "yellow", "value": 20 }
-            ]
+          "color": {
+            "mode": "fixed"
           }
-        }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "AI-Assisted" },
+            "properties": [{ "id": "color", "value": { "fixedColor": "green", "mode": "fixed" } }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Other" },
+            "properties": [{ "id": "color", "value": { "fixedColor": "semi-dark-blue", "mode": "fixed" } }]
+          }
+        ]
       },
-      "options": { "orientation": "horizontal", "displayMode": "gradient", "showUnfilled": true }
+      "options": {
+        "legend": { "displayMode": "table", "placement": "right", "values": ["value", "percent"] },
+        "tooltip": { "mode": "single" },
+        "pieType": "donut"
+      }
     },
     {
       "title": "Monthly AI-Assisted Commits",

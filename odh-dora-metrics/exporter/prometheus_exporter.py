@@ -97,13 +97,14 @@ WINDOWS = {
 }
 
 AI_WIN_TOTAL = Gauge("dora_ai_window_total", "AI-assisted commits in window", ["window"])
+AI_WIN_NON_AI = Gauge("dora_ai_window_non_ai", "Non-AI-labeled commits in window", ["window"])
 AI_WIN_PCT = Gauge("dora_ai_window_pct", "AI-assisted % in window", ["window"])
 AI_WIN_TOOL = Gauge("dora_ai_window_by_tool", "AI-assisted commits by tool in window", ["window", "tool"])
 AI_MONTHLY = Gauge("dora_ai_monthly_commits", "AI-assisted commits per month", ["month", "window"])
 AI_MONTHLY_PCT = Gauge("dora_ai_monthly_pct", "AI-assisted % of PRs per month", ["month", "window"])
 AI_MONTHLY_TOOL = Gauge("dora_ai_monthly_by_tool", "AI-assisted commits per tool per month", ["month", "tool", "window"])
 
-_AI_GAUGES = [AI_WIN_TOTAL, AI_WIN_PCT, AI_WIN_TOOL, AI_MONTHLY, AI_MONTHLY_PCT, AI_MONTHLY_TOOL]
+_AI_GAUGES = [AI_WIN_TOTAL, AI_WIN_NON_AI, AI_WIN_PCT, AI_WIN_TOOL, AI_MONTHLY, AI_MONTHLY_PCT, AI_MONTHLY_TOOL]
 
 
 def _update_metrics(result: dict) -> None:
@@ -246,6 +247,7 @@ def _update_ai_adoption(data: dict) -> None:
         pct = round(ai_total / pr_total * 100, 1) if pr_total > 0 else 0
 
         AI_WIN_TOTAL.labels(window=window_name).set(ai_total)
+        AI_WIN_NON_AI.labels(window=window_name).set(max(0, pr_total - ai_total))
         AI_WIN_PCT.labels(window=window_name).set(pct)
 
         tool_totals: dict[str, int] = {}

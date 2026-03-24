@@ -15,13 +15,15 @@ log = logging.getLogger(__name__)
 AI_PATTERNS: list[tuple[re.Pattern, str]] = [
     (re.compile(r"Co-Authored-By:.*Claude", re.IGNORECASE), "Claude"),
     (re.compile(r"Assisted-By:.*Claude", re.IGNORECASE), "Claude"),
-    (re.compile(r"Generated with.*Claude", re.IGNORECASE), "Claude"),
+    (re.compile(r"Generated.{0,5}(with|by).*Claude", re.IGNORECASE), "Claude"),
     (re.compile(r"Co-Authored-By:.*Copilot", re.IGNORECASE), "Copilot"),
     (re.compile(r"Assisted-By:.*Copilot", re.IGNORECASE), "Copilot"),
     (re.compile(r"Made-with:\s*Cursor", re.IGNORECASE), "Cursor"),
     (re.compile(r"Assisted-By:.*Cursor", re.IGNORECASE), "Cursor"),
+    (re.compile(r"Generated.{0,5}(with|by).*Cursor", re.IGNORECASE), "Cursor"),
     (re.compile(r"Co-Authored-By:.*OpenAI", re.IGNORECASE), "OpenAI"),
     (re.compile(r"Co-Authored-By:.*GPT", re.IGNORECASE), "OpenAI"),
+    (re.compile(r"Generated.{0,5}(with|by).*Copilot", re.IGNORECASE), "Copilot"),
 ]
 
 SEPARATOR = "---END---"

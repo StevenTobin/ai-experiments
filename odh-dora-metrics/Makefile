@@ -1,4 +1,4 @@
-.PHONY: collect report serve dashboard dashboard-down clean help
+.PHONY: collect report serve dashboard dashboard-down refresh clean help
 
 PYTHON ?= python3
 CLI = $(PYTHON) cli.py
@@ -41,6 +41,19 @@ dashboard-down: ## Stop the Docker Compose stack and exporter
 		echo "Exporter stopped."; \
 	fi
 	docker compose -f dashboard/docker-compose.yml down
+
+refresh: ## Collect fresh data and restart the exporter so dashboards update immediately
+	$(CLI) collect
+	@if [ -f $(EXPORTER_PID_FILE) ]; then \
+		kill $$(cat $(EXPORTER_PID_FILE)) 2>/dev/null || true; \
+		rm -f $(EXPORTER_PID_FILE); \
+	fi
+	@mkdir -p data
+	$(CLI) serve &> data/exporter.log & echo $$! > $(EXPORTER_PID_FILE)
+	@sleep 3
+	@echo ""
+	@echo "  Data collected and exporter restarted (PID: $$(cat $(EXPORTER_PID_FILE)))"
+	@echo "  Dashboards will reflect new data within ~15s (next Prometheus scrape)."
 
 clean: ## Remove cached data (clones + sqlite)
 	rm -rf data/

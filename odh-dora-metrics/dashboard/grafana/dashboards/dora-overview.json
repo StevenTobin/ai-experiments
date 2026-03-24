@@ -1458,7 +1458,8 @@
             "type": "prometheus",
             "uid": "PBFA97CFB590B2093"
           },
-          "instant": true
+          "instant": true,
+          "format": "table"
         },
         {
           "expr": "dora_release_days_since_previous",
@@ -1468,7 +1469,8 @@
             "type": "prometheus",
             "uid": "PBFA97CFB590B2093"
           },
-          "instant": true
+          "instant": true,
+          "format": "table"
         },
         {
           "expr": "dora_release_lead_time_p50_hours",
@@ -1478,7 +1480,8 @@
             "type": "prometheus",
             "uid": "PBFA97CFB590B2093"
           },
-          "instant": true
+          "instant": true,
+          "format": "table"
         },
         {
           "expr": "dora_release_cycle_time_p50_hours",
@@ -1488,7 +1491,8 @@
             "type": "prometheus",
             "uid": "PBFA97CFB590B2093"
           },
-          "instant": true
+          "instant": true,
+          "format": "table"
         },
         {
           "expr": "dora_release_cherry_picks",
@@ -1498,7 +1502,8 @@
             "type": "prometheus",
             "uid": "PBFA97CFB590B2093"
           },
-          "instant": true
+          "instant": true,
+          "format": "table"
         },
         {
           "expr": "dora_release_has_patch",
@@ -1508,7 +1513,8 @@
             "type": "prometheus",
             "uid": "PBFA97CFB590B2093"
           },
-          "instant": true
+          "instant": true,
+          "format": "table"
         }
       ]
     }
