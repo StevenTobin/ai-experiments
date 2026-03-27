@@ -115,6 +115,18 @@ CREATE TABLE IF NOT EXISTS ci_build_failure_messages (
     PRIMARY KEY (build_id, message)
 );
 
+CREATE TABLE IF NOT EXISTS ci_test_results (
+    build_id    TEXT NOT NULL,
+    test_name   TEXT NOT NULL,
+    suite       TEXT,
+    test_variant TEXT,
+    status      TEXT NOT NULL,
+    duration_seconds REAL,
+    is_leaf     INTEGER DEFAULT 1,
+    failure_message TEXT,
+    PRIMARY KEY (build_id, test_name, test_variant)
+);
+
 CREATE TABLE IF NOT EXISTS metrics_cache (
     metric      TEXT NOT NULL,
     window      TEXT NOT NULL,
@@ -313,6 +325,50 @@ class Store:
         return [dict(r) for r in self.conn.execute(
             "SELECT * FROM ci_build_failure_messages ORDER BY build_id, count DESC"
         ).fetchall()]
+
+    # --- Test results ---
+
+    def upsert_test_result(self, build_id: str, test_name: str,
+                           test_variant: str, status: str, *,
+                           suite: str | None = None,
+                           duration_seconds: float | None = None,
+                           is_leaf: bool = True,
+                           failure_message: str | None = None) -> None:
+        self.conn.execute(
+            """INSERT OR REPLACE INTO ci_test_results
+               (build_id, test_name, suite, test_variant, status,
+                duration_seconds, is_leaf, failure_message)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (build_id, test_name, suite, test_variant, status,
+             duration_seconds, int(is_leaf), failure_message),
+        )
+        self.conn.commit()
+
+    def get_test_results(self, build_id: str | None = None,
+                         status: str | None = None,
+                         leaf_only: bool = False) -> list[dict]:
+        q = "SELECT * FROM ci_test_results WHERE 1=1"
+        params: list[Any] = []
+        if build_id:
+            q += " AND build_id = ?"
+            params.append(build_id)
+        if status:
+            q += " AND status = ?"
+            params.append(status)
+        if leaf_only:
+            q += " AND is_leaf = 1"
+        q += " ORDER BY build_id, test_variant, test_name"
+        return [dict(r) for r in self.conn.execute(q, params).fetchall()]
+
+    def get_all_test_results(self) -> list[dict]:
+        """Get all test results, optimized for batch processing."""
+        return [dict(r) for r in self.conn.execute(
+            "SELECT * FROM ci_test_results ORDER BY build_id, test_variant, test_name"
+        ).fetchall()]
+
+    def test_result_count(self) -> int:
+        row = self.conn.execute("SELECT COUNT(*) as n FROM ci_test_results").fetchone()
+        return row["n"] if row else 0
 
     def save_metric(self, metric: str, window: str, value: Any) -> None:
         self.conn.execute(

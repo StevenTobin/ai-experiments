@@ -2,7 +2,8 @@
 
 Generates a structured report for a specific PR (or the most-recently-failed PR)
 with full context: git metadata, CI results, failure details, historical patterns,
-and suggested investigation paths.
+and suggested investigation paths.  Includes links to Prow build logs and CI
+observability Grafana dashboards for deeper investigation.
 """
 
 from __future__ import annotations
@@ -12,6 +13,14 @@ import logging
 from collections import defaultdict
 
 from metrics import ci_efficiency
+from reports.assertion_parser import format_for_report, parse_failure_message
+from reports.failure_patterns import (
+    _detect_manifest_regressions,
+    _is_manifest_update_pr,
+    _is_wrapper_message,
+    _test_name_to_file,
+)
+from reports.links import LinkBuilder, local_access_appendix
 from store.db import Store
 
 log = logging.getLogger(__name__)
@@ -47,10 +56,13 @@ def _find_pr(store: Store, pr_number: int | None) -> dict | None:
     return prs[-1] if prs else None
 
 
-def generate(store: Store, pr_number: int | None = None) -> str:
+def generate(store: Store, pr_number: int | None = None,
+             links: LinkBuilder | None = None) -> str:
     """Generate a failure investigation report for a PR.
 
     If pr_number is None, uses the most recently merged PR that had CI failures.
+    When a LinkBuilder is provided, includes links to Prow logs, GitHub, and
+    CI observability Grafana dashboards.
     """
     pr = _find_pr(store, pr_number)
     if pr is None:
@@ -77,6 +89,9 @@ def generate(store: Store, pr_number: int | None = None) -> str:
     _w(f"- **Title:** {pr.get('title', 'N/A')}")
     _w(f"- **Author:** {pr.get('author', 'N/A')}")
     _w(f"- **Merged:** {pr.get('merged_at', 'N/A')}")
+    if links:
+        _w(f"- **GitHub:** [{links.org}/{links.repo}#{pr['number']}]"
+           f"({links.github_pr(pr['number'])})")
     _w(f"- **Components:** {', '.join(components) if components else 'unknown'}")
     _w(f"- **Jira tickets:** {', '.join(jira_keys) if jira_keys else 'none detected'}")
     _w(f"- **AI-assisted:** {'Yes' if pr.get('is_ai_assisted') else 'No'}")
@@ -88,6 +103,21 @@ def generate(store: Store, pr_number: int | None = None) -> str:
         if len(changed_files) > 10:
             _w(f"  - ... and {len(changed_files) - 10} more")
     _w("")
+
+    if links:
+        ci_obs_pr = links.ci_obs_pr_overview(pr["number"])
+        if ci_obs_pr:
+            _w(f"> **CI Observability:** [PR overview in Grafana]({ci_obs_pr})")
+            _w("")
+
+    # --- Manifest regression check ---
+    all_prs = store.get_merged_prs(base_branch="main")
+    manifest_prs = [p for p in all_prs if _is_manifest_update_pr(p)]
+    build_start_map = {b["build_id"]: b.get("started_at") or "" for b in all_builds}
+    all_step_data = store.get_all_build_steps()
+    manifest_regressions = _detect_manifest_regressions(
+        manifest_prs, all_builds, all_step_data, build_start_map,
+    )
 
     # --- CI Results ---
     _w("## CI Results")
@@ -103,23 +133,39 @@ def generate(store: Store, pr_number: int | None = None) -> str:
         _w(f"- **Total CI wait time:** {total_wait:.0f} minutes ({total_wait / 60:.1f} hours)")
     _w("")
 
+    if builds and links:
+        _w("### Build Links")
+        _w("")
+        for b in builds:
+            result_icon = "PASS" if b["result"] == "success" else "FAIL"
+            prow_url = links.prow_build(pr["number"], b["job_name"], b["build_id"])
+            line = f"- **{result_icon}** `{b['build_id']}` — [{b['job_name']}]({prow_url})"
+            logs_url = links.ci_obs_logs(b["build_id"])
+            if logs_url:
+                line += f" · [logs]({logs_url})"
+            tests_url = links.ci_obs_tests(b["build_id"])
+            if tests_url:
+                line += f" · [tests]({tests_url})"
+            gcs_url = links.gcs_artifacts(pr["number"], b["job_name"], b["build_id"])
+            line += f" · [GCS artifacts]({gcs_url})"
+            _w(line)
+        _w("")
+
     # --- Failure Details ---
+    failed_build_ids = {b["build_id"] for b in builds if b["result"] == "failure"}
+    step_data = store.get_build_steps()
+    pr_step_failures = [s for s in step_data
+                       if s["build_id"] in failed_build_ids and s.get("level") == "Error"]
+    step_counts: dict[str, int] = defaultdict(int)
+    for s in pr_step_failures:
+        step_counts[s["step_name"]] += 1
+
     if failed_cycles:
         _w("## Failure Details")
         _w("")
 
-        failed_build_ids = {b["build_id"] for b in builds if b["result"] == "failure"}
-
-        step_data = store.get_build_steps()
-        pr_step_failures = [s for s in step_data
-                           if s["build_id"] in failed_build_ids and s.get("level") == "Error"]
         if pr_step_failures:
-            step_counts: dict[str, int] = defaultdict(int)
-            infra_count = 0
-            for s in pr_step_failures:
-                step_counts[s["step_name"]] += 1
-                if s.get("is_infra"):
-                    infra_count += 1
+            infra_count = sum(1 for s in pr_step_failures if s.get("is_infra"))
 
             _w("### Failing Steps")
             _w("")
@@ -135,6 +181,35 @@ def generate(store: Store, pr_number: int | None = None) -> str:
                    f"failures ({infra_count / total_step_failures * 100:.0f}%) are infrastructure-related")
             _w("")
 
+            # Check if any failing steps correlate with a manifest update
+            regressed_steps = {r["step"]: r for r in manifest_regressions if not r["is_infra"]}
+            matched = [(step, regressed_steps[step])
+                       for step in step_counts if step in regressed_steps]
+            if matched:
+                _w("### Probable Manifest-Induced Regression")
+                _w("")
+                _w("> **These failures are likely NOT caused by this PR's code changes.** "
+                   "The following steps started failing (or got significantly worse) "
+                   "after a recent manifest/image update PR merged. The new component "
+                   "image is the probable root cause.")
+                _w("")
+                for step_name, reg in matched:
+                    mpr = reg["manifest_pr"]
+                    pr_ref = f"#{mpr['number']}"
+                    title = (mpr.get("title") or "")[:60]
+                    if links:
+                        pr_ref = f"[#{mpr['number']}]({links.github_pr(mpr['number'])})"
+                    _w(f"- **`{step_name}`**: failure rate went from "
+                       f"{reg['before_rate']:.0%} → {reg['after_rate']:.0%} "
+                       f"after {pr_ref} ({title})")
+                _w("")
+                _w("**Recommended action:** Do NOT debug this PR's code for these "
+                   "failures. Instead, investigate the manifest update PR above — "
+                   "compare old vs new image SHAs in `get_all_manifests.sh` or "
+                   "`build/operands-map.yaml` and check the upstream component's "
+                   "changelog for breaking changes.")
+                _w("")
+
         fail_msgs = store.get_build_failure_messages()
         pr_msgs = [m for m in fail_msgs if m["build_id"] in failed_build_ids]
         if pr_msgs:
@@ -146,6 +221,50 @@ def generate(store: Store, pr_number: int | None = None) -> str:
             _w("")
             for msg, cnt in sorted(msg_counts.items(), key=lambda x: x[1], reverse=True)[:5]:
                 _w(f"- `{msg}` (x{cnt})")
+            _w("")
+
+        # --- Failing e2e tests ---
+        test_results = store.get_test_results(status="failed", leaf_only=True)
+        pr_test_failures = [t for t in test_results if t["build_id"] in failed_build_ids]
+        if pr_test_failures:
+            # Group by test name across builds
+            test_fail_counts: dict[str, int] = defaultdict(int)
+            test_variants: dict[str, set] = defaultdict(set)
+            test_msgs: dict[str, str] = {}
+            for t in pr_test_failures:
+                test_fail_counts[t["test_name"]] += 1
+                test_variants[t["test_name"]].add(t.get("test_variant") or "")
+                if t.get("failure_message") and t["test_name"] not in test_msgs:
+                    test_msgs[t["test_name"]] = t["failure_message"]
+
+            _w("### Failing Tests")
+            _w("")
+            _w(f"**{len(test_fail_counts)} distinct test(s) failed** across "
+               f"{len(failed_build_ids)} failed build(s):")
+            _w("")
+            for tname, cnt in sorted(test_fail_counts.items(),
+                                     key=lambda x: x[1], reverse=True)[:20]:
+                variants = test_variants[tname]
+                variant_str = ""
+                if variants and variants != {""}:
+                    variant_str = f" (in {', '.join(sorted(variants))})"
+                test_file = _test_name_to_file(tname)
+                _w(f"- **`{tname}`** — {cnt} build(s){variant_str}")
+                _w(f"  - File: `{test_file}`")
+                if tname in test_msgs:
+                    raw = test_msgs[tname]
+                    if _is_wrapper_message(raw):
+                        _w(f"  - Error: *(Go framework wrapper — actual error is "
+                           f"in test output, check CI logs or GCS artifacts)*")
+                    else:
+                        parsed = parse_failure_message(raw)
+                        _w(f"  - Error: {format_for_report(raw)}")
+                        if parsed.expected:
+                            _w(f"    - Expected: `{parsed.expected[:150]}`")
+                        if parsed.root_cause:
+                            _w(f"    - Root cause: `{parsed.root_cause[:200]}`")
+            if len(test_fail_counts) > 20:
+                _w(f"- ... and {len(test_fail_counts) - 20} more tests")
             _w("")
 
         resource_builds = [b for b in builds if b["build_id"] in failed_build_ids]
@@ -246,31 +365,88 @@ def generate(store: Store, pr_number: int | None = None) -> str:
     _w("## Suggested Investigation")
     _w("")
 
+    step_idx = 1
+
+    # Check if any failing steps are manifest-regression candidates
+    regressed_steps = {r["step"]: r for r in manifest_regressions if not r["is_infra"]}
+    matched_regressions = [(step, regressed_steps[step])
+                           for step in step_counts if step in regressed_steps]
+
+    if matched_regressions:
+        reg_step_names = [s for s, _ in matched_regressions]
+        mpr_nums = sorted({r["manifest_pr"]["number"] for _, r in matched_regressions})
+        pr_refs = ", ".join(f"#{n}" for n in mpr_nums)
+        _w(f"{step_idx}. **Manifest-induced regression detected.** Steps "
+           f"{', '.join(f'`{s}`' for s in reg_step_names)} started failing after "
+           f"manifest update {pr_refs}. This PR's code is likely not the cause. "
+           "Investigate the image bump in the manifest PR instead.")
+        step_idx += 1
+        _w(f"{step_idx}. **Compare image SHAs** in `get_all_manifests.sh` or "
+           "`build/operands-map.yaml` between the old and new commits in the "
+           "manifest PR. Check the upstream component repo's changelog for "
+           "breaking changes between those versions.")
+        step_idx += 1
+
     if pr_step_failures:
         infra_steps = [s for s in pr_step_failures if s.get("is_infra")]
         code_steps = [s for s in pr_step_failures if not s.get("is_infra")]
+        non_regression_code = [s for s in code_steps
+                               if s["step_name"] not in regressed_steps]
         if infra_steps and not code_steps:
-            _w("1. **Infrastructure issue detected.** All failing steps are infrastructure "
+            _w(f"{step_idx}. **Infrastructure issue detected.** All failing steps are infrastructure "
                "(provisioning, scheduling). Check cluster pool availability and IPI install health.")
-        elif infra_steps:
-            _w("1. **Mixed infra + code failures.** Some failures are infrastructure-related. "
+            step_idx += 1
+        elif infra_steps and non_regression_code:
+            _w(f"{step_idx}. **Mixed infra + code failures.** Some failures are infrastructure-related. "
                "Re-run CI to separate infra flakes from code regressions.")
-        else:
-            _w("1. **Code failure.** Failing steps are test execution. Review the error messages above.")
+            step_idx += 1
+        elif non_regression_code:
+            _w(f"{step_idx}. **Code failure.** Failing steps are test execution. "
+               "Review the error messages above.")
+            step_idx += 1
 
     if pr_msgs:
         top_msg = max(msg_counts.items(), key=lambda x: x[1])
-        _w(f"2. **Most common error:** `{top_msg[0][:100]}` — search the codebase for this "
+        _w(f"{step_idx}. **Most common error:** `{top_msg[0][:100]}` — search the codebase for this "
            f"assertion or timeout and check recent changes to the affected code path.")
+        step_idx += 1
 
     if components:
         for comp in components:
-            _w(f"3. **Review {comp} component** — "
+            _w(f"{step_idx}. **Review {comp} component** — "
                f"Check recent changes in `internal/controller/components/{comp}/`")
+            step_idx += 1
 
     if jira_keys:
         for key in jira_keys:
-            _w(f"4. **Jira context:** https://redhat.atlassian.net/browse/{key}")
+            _w(f"{step_idx}. **Jira context:** https://redhat.atlassian.net/browse/{key}")
+            step_idx += 1
+
+    if links:
+        _w("")
+        _w("### Investigation Links")
+        _w("")
+        failed_builds = [b for b in builds if b["result"] == "failure"]
+        if failed_builds:
+            first_fail = failed_builds[0]
+            prow = links.prow_build(pr["number"], first_fail["job_name"], first_fail["build_id"])
+            _w(f"- **Prow build logs (first failure):** {prow}")
+            gcs = links.gcs_artifacts(pr["number"], first_fail["job_name"], first_fail["build_id"])
+            _w(f"- **GCS artifacts (first failure):** {gcs}")
+            build_log = links.gcs_build_log(pr["number"], first_fail["job_name"], first_fail["build_id"])
+            _w(f"- **Raw build log:** {build_log}")
+            logs = links.ci_obs_logs(first_fail["build_id"])
+            if logs:
+                _w(f"- **CI operator logs:** {logs}")
+            tests = links.ci_obs_tests(first_fail["build_id"])
+            if tests:
+                _w(f"- **JUnit test results:** {tests}")
+            inv = links.ci_obs_investigation(first_fail["build_id"])
+            if inv:
+                _w(f"- **Build investigation dashboard:** {inv}")
+
+        _w("")
+        _w(local_access_appendix(links))
 
     _w("")
     return "\n".join(lines)

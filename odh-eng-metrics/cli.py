@@ -359,20 +359,21 @@ def _print_text_report(result: dict) -> None:
 @click.option("--json-output", is_flag=True, help="Output as JSON instead of markdown")
 def investigate(pr: int | None, json_output: bool) -> None:
     """Generate a failure investigation report for a PR."""
-    from reports import failure_investigation, json_export
+    from reports import failure_investigation, json_export, links
 
     cfg = _load_config()
     store = Store(cfg["collection"]["cache_db"])
+    lb = links.from_config(cfg)
 
     if json_output:
         if pr is None:
             click.echo("Error: --pr is required with --json-output", err=True)
             store.close()
             sys.exit(1)
-        result = json_export.export_pr_context(store, pr)
+        result = json_export.export_pr_context(store, pr, links=lb)
         click.echo(json.dumps(result, indent=2))
     else:
-        click.echo(failure_investigation.generate(store, pr_number=pr))
+        click.echo(failure_investigation.generate(store, pr_number=pr, links=lb))
 
     store.close()
 
@@ -381,11 +382,12 @@ def investigate(pr: int | None, json_output: bool) -> None:
 @click.option("--weeks", type=int, default=1, help="Number of weeks to cover (default: 1)")
 def digest(weeks: int) -> None:
     """Generate a weekly CI health digest."""
-    from reports import weekly_digest
+    from reports import weekly_digest, links
 
     cfg = _load_config()
     store = Store(cfg["collection"]["cache_db"])
-    click.echo(weekly_digest.generate(store, weeks_back=weeks))
+    lb = links.from_config(cfg)
+    click.echo(weekly_digest.generate(store, weeks_back=weeks, links=lb))
     store.close()
 
 
@@ -393,11 +395,12 @@ def digest(weeks: int) -> None:
 @click.option("--days", type=int, default=30, help="Lookback period in days (default: 30)")
 def failure_patterns(days: int) -> None:
     """Analyze recurring failure patterns across CI builds."""
-    from reports import failure_patterns as fp
+    from reports import failure_patterns as fp, links
 
     cfg = _load_config()
     store = Store(cfg["collection"]["cache_db"])
-    click.echo(fp.generate(store, lookback_days=days))
+    lb = links.from_config(cfg)
+    click.echo(fp.generate(store, lookback_days=days, links=lb))
     store.close()
 
 
@@ -411,15 +414,16 @@ def export_context(pr: int | None, days: int, output: str | None) -> None:
     With --pr: exports detailed context for a single PR.
     Without --pr: exports codebase-wide CI health summary.
     """
-    from reports import json_export
+    from reports import json_export, links
 
     cfg = _load_config()
     store = Store(cfg["collection"]["cache_db"])
+    lb = links.from_config(cfg)
 
     if pr is not None:
-        result = json_export.export_pr_context(store, pr)
+        result = json_export.export_pr_context(store, pr, links=lb)
     else:
-        result = json_export.export_codebase_health(store, lookback_days=days)
+        result = json_export.export_codebase_health(store, lookback_days=days, links=lb)
 
     store.close()
 

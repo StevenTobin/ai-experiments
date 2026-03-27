@@ -34,6 +34,7 @@ ci_observability:
   enabled: true
   vm_url: http://localhost:8428
   vl_url: http://localhost:9428
+  grafana_url: http://localhost:3000  # CI Observability Grafana (for report links)
   collect_steps: true
   collect_failure_messages: true
   ingest_wait: 180  # seconds to wait for scraper to ingest data on first run
