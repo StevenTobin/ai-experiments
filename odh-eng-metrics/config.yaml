@@ -1,0 +1,46 @@
+upstream:
+  owner: opendatahub-io
+  repo: opendatahub-operator
+  clone_url: https://github.com/opendatahub-io/opendatahub-operator.git
+  branches:
+    main: main
+    stable: stable
+    downstream_staging: rhoai
+  tags:
+    release_pattern: 'v\d+\.\d+\.\d+$'
+    ea_pattern: 'v\d+\.\d+\.\d+-ea\.\d+$'
+    patch_pattern: 'v\d+\.\d+\.[1-9]\d*$'
+
+downstream:
+  owner: red-hat-data-services
+  repo: rhods-operator
+  clone_url: https://github.com/red-hat-data-services/rhods-operator.git
+  branches:
+    main: main
+    release_pattern: 'rhoai-\d+\.\d+$'
+    ea_pattern: 'rhoai-\d+\.\d+-ea\.\d+$'
+  bot_pr_prefixes:
+    - "chore(deps):"
+
+jira:
+  enabled: false
+  project: RHOAIENG
+  issue_pattern: 'RHOAIENG-\d+'
+
+per_release:
+  min_version: "3.0.0"
+
+ci_observability:
+  enabled: true
+  vm_url: http://localhost:8428
+  vl_url: http://localhost:9428
+  collect_steps: true
+  collect_failure_messages: true
+  ingest_wait: 180  # seconds to wait for scraper to ingest data on first run
+  # project_dir is used by the Makefile (CI_OBS_DIR variable), not Python.
+  # Override via: make collect CI_OBS_DIR=/path/to/openshift-ci-observability
+
+collection:
+  lookback_days: 365
+  data_dir: data
+  cache_db: data/eng-metrics.sqlite
