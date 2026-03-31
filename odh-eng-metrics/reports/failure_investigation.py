@@ -93,7 +93,21 @@ def generate(store: Store, pr_number: int | None = None,
         _w(f"- **GitHub:** [{links.org}/{links.repo}#{pr['number']}]"
            f"({links.github_pr(pr['number'])})")
     _w(f"- **Components:** {', '.join(components) if components else 'unknown'}")
-    _w(f"- **Jira tickets:** {', '.join(jira_keys) if jira_keys else 'none detected'}")
+    if jira_keys:
+        jira_issue_map = store.get_jira_issue_map()
+        jira_parts = []
+        for key in jira_keys:
+            issue = jira_issue_map.get(key)
+            if issue:
+                itype = issue.get("issue_type") or ""
+                prio = issue.get("priority") or ""
+                summary = (issue.get("summary") or "")[:50]
+                jira_parts.append(f"{key} ({itype}/{prio}: {summary})")
+            else:
+                jira_parts.append(key)
+        _w(f"- **Jira tickets:** {', '.join(jira_parts)}")
+    else:
+        _w("- **Jira tickets:** none detected")
     _w(f"- **AI-assisted:** {'Yes' if pr.get('is_ai_assisted') else 'No'}")
     _w(f"- **Size:** +{pr.get('additions', 0)} / -{pr.get('deletions', 0)}")
     if changed_files:

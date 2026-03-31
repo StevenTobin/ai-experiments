@@ -177,6 +177,11 @@ JIRA_CI_RETEST_TAX = Gauge("odh_eng_jira_ci_retest_tax", "Retest tax per Jira ti
 JIRA_CI_CYCLES = Gauge("odh_eng_jira_ci_cycles", "CI cycles per Jira ticket", ["jira_key"])
 JIRA_CI_PR_COUNT = Gauge("odh_eng_jira_ci_pr_count", "PRs per Jira ticket", ["jira_key"])
 
+JIRA_TYPE_CI_FAILURE_RATE = Gauge("odh_eng_jira_type_ci_failure_rate", "CI failure rate by issue type", ["issue_type"])
+JIRA_TYPE_CI_RETEST_TAX = Gauge("odh_eng_jira_type_ci_retest_tax", "Retest tax by issue type", ["issue_type"])
+JIRA_PRIORITY_CI_FAILURE_RATE = Gauge("odh_eng_jira_priority_ci_failure_rate", "CI failure rate by priority", ["priority"])
+JIRA_PRIORITY_CI_RETEST_TAX = Gauge("odh_eng_jira_priority_ci_retest_tax", "Retest tax by priority", ["priority"])
+
 REL_CI_FAILURE_RATE = Gauge("odh_eng_release_ci_failure_rate", "CI failure rate per release", ["release"])
 REL_CI_RETEST_TAX = Gauge("odh_eng_release_ci_retest_tax", "Retest tax per release", ["release"])
 REL_CI_TOTAL_CYCLES = Gauge("odh_eng_release_ci_total_cycles", "Total CI cycles per release", ["release"])
@@ -200,6 +205,8 @@ _GIT_CI_LABELED_GAUGES = [
     CODE_CRITICAL_FUNCS, CODE_HIGH_FUNCS, CODE_AVG_RISK, CODE_RISK_CI_FAILURE,
     COMP_CI_CPU_HOURS, COMP_CI_MEM_GB_HOURS,
     JIRA_CI_FAILURE_RATE, JIRA_CI_RETEST_TAX, JIRA_CI_CYCLES, JIRA_CI_PR_COUNT,
+    JIRA_TYPE_CI_FAILURE_RATE, JIRA_TYPE_CI_RETEST_TAX,
+    JIRA_PRIORITY_CI_FAILURE_RATE, JIRA_PRIORITY_CI_RETEST_TAX,
     REL_CI_FAILURE_RATE, REL_CI_RETEST_TAX, REL_CI_TOTAL_CYCLES,
     COMP_STEP_FAILURES, COMP_DURATION_BREAKDOWN,
     COMP_INFRA_FAILURE_PCT, COMP_CODE_FAILURE_PCT,
@@ -492,6 +499,20 @@ def _update_git_ci_insights(data: dict) -> None:
         JIRA_CI_CYCLES.labels(jira_key=key).set(entry.get("total_cycles", 0))
         JIRA_CI_PR_COUNT.labels(jira_key=key).set(entry.get("pr_count", 0))
 
+    for entry in data.get("jira_type_health", []):
+        itype = entry["issue_type"]
+        if entry.get("cycle_failure_rate") is not None:
+            JIRA_TYPE_CI_FAILURE_RATE.labels(issue_type=itype).set(entry["cycle_failure_rate"])
+        if entry.get("retest_tax") is not None:
+            JIRA_TYPE_CI_RETEST_TAX.labels(issue_type=itype).set(entry["retest_tax"])
+
+    for entry in data.get("jira_priority_health", []):
+        prio = entry["priority"]
+        if entry.get("cycle_failure_rate") is not None:
+            JIRA_PRIORITY_CI_FAILURE_RATE.labels(priority=prio).set(entry["cycle_failure_rate"])
+        if entry.get("retest_tax") is not None:
+            JIRA_PRIORITY_CI_RETEST_TAX.labels(priority=prio).set(entry["retest_tax"])
+
     for entry in data.get("release_health", []):
         rel = entry["release"]
         if entry.get("cycle_failure_rate") is not None:
@@ -583,6 +604,10 @@ def _build_table_data(result: dict) -> None:
         jk = entry["jira_key"]
         rows.append({
             "jira_key": jk,
+            "issue_type": entry.get("issue_type", ""),
+            "priority": entry.get("priority", ""),
+            "status": entry.get("status", ""),
+            "summary": (entry.get("summary") or "")[:60],
             "failure_rate": entry.get("cycle_failure_rate"),
             "retest_tax": entry.get("retest_tax"),
             "ci_cycles": entry.get("total_cycles", 0),
@@ -592,6 +617,28 @@ def _build_table_data(result: dict) -> None:
         })
     rows.sort(key=lambda r: r.get("failure_rate") or 0, reverse=True)
     _TABLE_DATA["jira-health"] = rows[:20]
+
+    rows = []
+    for entry in data.get("jira_type_health", []):
+        rows.append({
+            "issue_type": entry["issue_type"],
+            "failure_rate": entry.get("cycle_failure_rate"),
+            "retest_tax": entry.get("retest_tax"),
+            "ci_cycles": entry.get("total_cycles", 0),
+            "prs": entry.get("total_prs_with_ci", 0),
+        })
+    _TABLE_DATA["jira-type-health"] = rows
+
+    rows = []
+    for entry in data.get("jira_priority_health", []):
+        rows.append({
+            "priority": entry["priority"],
+            "failure_rate": entry.get("cycle_failure_rate"),
+            "retest_tax": entry.get("retest_tax"),
+            "ci_cycles": entry.get("total_cycles", 0),
+            "prs": entry.get("total_prs_with_ci", 0),
+        })
+    _TABLE_DATA["jira-priority-health"] = rows
 
     rows = []
     for entry in data.get("release_health", []):

@@ -11,7 +11,7 @@ from pathlib import Path
 import click
 import yaml
 
-from collector import ai_commit_detector, branch_tracker, cherry_pick_detector, ci_collector, code_analyzer, pr_collector, revert_detector, tag_collector
+from collector import ai_commit_detector, branch_tracker, cherry_pick_detector, ci_collector, code_analyzer, jira_collector, pr_collector, revert_detector, tag_collector
 from collector.repo_manager import ensure_repos
 from metrics.calculator import compute_all
 from store.db import Store
@@ -28,6 +28,8 @@ def _load_config() -> dict:
 def _setup_logging(verbose: bool) -> None:
     level = logging.DEBUG if verbose else logging.INFO
     logging.basicConfig(level=level, format=LOG_FORMAT, stream=sys.stderr)
+    # httpx logs every HTTP request at INFO; keep the output clean
+    logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
 @click.group()
@@ -99,6 +101,25 @@ def collect() -> None:
         click.echo(f"  {n} function risk scores stored")
     else:
         click.echo("  no code analysis tool available (install hotspots or gocyclo)")
+
+    if cfg.get("jira", {}).get("enabled"):
+        click.echo("Enriching with JIRA issue metadata...")
+        n = jira_collector.collect_pr_issues(store, cfg)
+        if n > 0:
+            click.echo(f"  {n} JIRA issues fetched/updated")
+        else:
+            click.echo("  no new JIRA issues to fetch (or JIRA_TOKEN not set)")
+
+        collections = cfg.get("jira", {}).get("collections", [])
+        for coll in collections:
+            selector = (
+                coll.get("labels")
+                or f"prefix:{coll['label_prefix']}" if coll.get("label_prefix")
+                else coll.get("jql", "custom JQL")
+            )
+            click.echo(f"Collecting JIRA issues for '{coll['name']}' ({selector})...")
+            n = jira_collector.collect_collection(store, cfg, coll)
+            click.echo(f"  {n} issues in collection")
 
     store.close()
     click.echo("Collection complete.")
@@ -433,6 +454,53 @@ def export_context(pr: int | None, days: int, output: str | None) -> None:
         click.echo(f"Exported to {output}")
     else:
         click.echo(text)
+
+
+@cli.command("jira-report")
+@click.argument("collection")
+@click.option("--json-output", is_flag=True, help="Output as JSON instead of text")
+def jira_report(collection: str, json_output: bool) -> None:
+    """Analyze a JIRA issue collection (e.g. bug bash results)."""
+    from reports import jira_report as jr
+
+    cfg = _load_config()
+    store = Store(cfg["collection"]["cache_db"])
+
+    coll_cfg = None
+    for c in cfg.get("jira", {}).get("collections", []):
+        if c["name"] == collection:
+            coll_cfg = c
+            break
+
+    issues = store.get_collection_issues(collection)
+    if not issues:
+        click.echo(f"No issues found for collection '{collection}'. Run 'make collect' first.", err=True)
+        store.close()
+        sys.exit(1)
+
+    result = jr.generate(issues, collection_name=collection, collection_cfg=coll_cfg, store=store)
+    store.close()
+
+    if json_output:
+        click.echo(json.dumps(result, indent=2))
+    else:
+        click.echo(jr.render_text(result))
+
+
+@cli.command("ci-report")
+@click.option("-o", "--output", type=click.Path(), default="data/ci-health-report.html",
+              help="Output path for the HTML report")
+def ci_report(output: str) -> None:
+    """Generate an HTML CI health report with charts (week / month / 3 months)."""
+    from reports import ci_health_report
+
+    cfg = _load_config()
+    store = Store(cfg["collection"]["cache_db"])
+
+    click.echo("Generating CI health report...")
+    path = ci_health_report.generate(store, output_path=output)
+    store.close()
+    click.echo(f"Report written to {path}")
 
 
 @cli.command()

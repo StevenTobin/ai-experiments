@@ -195,8 +195,25 @@ def export_pr_context(store: Store, pr_number: int,
             if logs_url:
                 sf["links"]["ci_obs_logs"] = logs_url
 
+    jira_issues_enriched = []
+    if jira_keys:
+        jira_issue_map = store.get_jira_issue_map()
+        for key in jira_keys:
+            issue = jira_issue_map.get(key)
+            if issue:
+                jira_issues_enriched.append({
+                    "key": key,
+                    "summary": issue.get("summary"),
+                    "type": issue.get("issue_type"),
+                    "priority": issue.get("priority"),
+                    "status": issue.get("status"),
+                    "assignee": issue.get("assignee"),
+                })
+            else:
+                jira_issues_enriched.append({"key": key})
+
     return {
-        "schema_version": "1.1",
+        "schema_version": "1.2",
         "exported_at": datetime.now(timezone.utc).isoformat(),
         "pr": {
             "number": pr["number"],
@@ -209,6 +226,7 @@ def export_pr_context(store: Store, pr_number: int,
             "is_ai_assisted": bool(pr.get("is_ai_assisted")),
             "components": components,
             "jira_keys": jira_keys,
+            "jira_issues": jira_issues_enriched,
             "changed_files": changed_files,
             "was_reverted": was_reverted,
             "links": pr_links,

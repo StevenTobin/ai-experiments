@@ -196,12 +196,14 @@ def _pr_had_clean_pass(pr_builds: list[dict]) -> bool:
 
 
 def compute_jira_ci_health(store: Store) -> list[dict]:
-    """CI metrics grouped by Jira ticket."""
+    """CI metrics grouped by Jira ticket, enriched with issue metadata."""
     prs = store.get_merged_prs(base_branch="main")
     builds = store.get_ci_builds()
 
     if not builds:
         return []
+
+    jira_issue_map = store.get_jira_issue_map()
 
     pr_jira: dict[int, list[str]] = {}
     for p in prs:
@@ -227,15 +229,88 @@ def compute_jira_ci_health(store: Store) -> list[dict]:
             1 for pr_num in jira_prs[jira_key]
             if not _pr_had_clean_pass(pr_builds_map[pr_num])
         )
-        results.append({
+        entry = {
             "jira_key": jira_key,
             "pr_count": summary.get("total_prs_with_ci", 0),
             "overridden_prs": override_count,
             **summary,
-        })
+        }
+        issue = jira_issue_map.get(jira_key)
+        if issue:
+            entry["issue_type"] = issue.get("issue_type")
+            entry["priority"] = issue.get("priority")
+            entry["status"] = issue.get("status")
+            entry["summary"] = issue.get("summary")
+            entry["assignee"] = issue.get("assignee")
+            entry["story_points"] = issue.get("story_points")
+        results.append(entry)
 
     results.sort(key=lambda x: x.get("cycle_failure_rate") or 0, reverse=True)
     return results[:20]
+
+
+def compute_jira_issue_type_ci_health(store: Store) -> list[dict]:
+    """CI health aggregated by JIRA issue type (Bug, Story, Task, etc.)."""
+    prs = store.get_merged_prs(base_branch="main")
+    builds = store.get_ci_builds()
+    jira_issue_map = store.get_jira_issue_map()
+
+    if not builds or not jira_issue_map:
+        return []
+
+    pr_jira: dict[int, list[str]] = {}
+    for p in prs:
+        keys = _parse_json_field(p.get("jira_keys"))
+        if keys:
+            pr_jira[p["number"]] = keys
+
+    type_builds: dict[str, list[dict]] = defaultdict(list)
+    for b in builds:
+        for key in pr_jira.get(b["pr_number"], []):
+            issue = jira_issue_map.get(key)
+            if issue:
+                itype = issue.get("issue_type") or "Unknown"
+                type_builds[itype].append(b)
+
+    results = []
+    for itype, tbuilds in sorted(type_builds.items()):
+        summary = ci_efficiency.compute_summary(tbuilds)
+        results.append({"issue_type": itype, **summary})
+
+    results.sort(key=lambda x: x.get("cycle_failure_rate") or 0, reverse=True)
+    return results
+
+
+def compute_jira_priority_ci_health(store: Store) -> list[dict]:
+    """CI health aggregated by JIRA priority (Blocker, Critical, Major, etc.)."""
+    prs = store.get_merged_prs(base_branch="main")
+    builds = store.get_ci_builds()
+    jira_issue_map = store.get_jira_issue_map()
+
+    if not builds or not jira_issue_map:
+        return []
+
+    pr_jira: dict[int, list[str]] = {}
+    for p in prs:
+        keys = _parse_json_field(p.get("jira_keys"))
+        if keys:
+            pr_jira[p["number"]] = keys
+
+    priority_builds: dict[str, list[dict]] = defaultdict(list)
+    for b in builds:
+        for key in pr_jira.get(b["pr_number"], []):
+            issue = jira_issue_map.get(key)
+            if issue:
+                prio = issue.get("priority") or "Unknown"
+                priority_builds[prio].append(b)
+
+    results = []
+    for prio, pbuilds in sorted(priority_builds.items()):
+        summary = ci_efficiency.compute_summary(pbuilds)
+        results.append({"priority": prio, **summary})
+
+    results.sort(key=lambda x: x.get("cycle_failure_rate") or 0, reverse=True)
+    return results
 
 
 def compute_release_ci_health(store: Store) -> list[dict]:
@@ -635,6 +710,12 @@ def compute(store: Store) -> dict:
     log.info("Computing Jira CI health...")
     jira_health = compute_jira_ci_health(store)
 
+    log.info("Computing Jira issue type CI health...")
+    jira_type_health = compute_jira_issue_type_ci_health(store)
+
+    log.info("Computing Jira priority CI health...")
+    jira_priority_health = compute_jira_priority_ci_health(store)
+
     log.info("Computing release CI health...")
     release_health = compute_release_ci_health(store)
 
@@ -668,6 +749,8 @@ def compute(store: Store) -> dict:
         "component_resource_cost": resource_cost,
         "ai_summary": ai_summary,
         "jira_health": jira_health,
+        "jira_type_health": jira_type_health,
+        "jira_priority_health": jira_priority_health,
         "release_health": release_health,
         "revert_signals": revert_signals,
         "_risk_summary": risk_summary,

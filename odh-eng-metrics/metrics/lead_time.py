@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import statistics
+from collections import defaultdict
 from datetime import datetime
 
 from store.db import Store
@@ -72,6 +74,8 @@ def compute(store: Store) -> dict:
             if tag_hours is not None and tag_hours >= 0:
                 to_release.append(tag_hours)
 
+    jira_lead = _compute_jira_lead_time(store, prs)
+
     return {
         "pr_cycle_time_hours": {
             "count": len(pr_cycle_times),
@@ -98,4 +102,68 @@ def compute(store: Store) -> dict:
             "mean": round(statistics.mean(to_release), 1) if to_release else None,
             **_percentiles(to_release),
         },
+        "jira_issue_to_merge_hours": jira_lead,
+    }
+
+
+def _parse_json_field(value: str | None) -> list:
+    if not value:
+        return []
+    try:
+        return json.loads(value)
+    except (json.JSONDecodeError, TypeError):
+        return []
+
+
+def _compute_jira_lead_time(store: Store, prs: list[dict]) -> dict:
+    """JIRA issue created -> PR merged lead time (idea to delivery).
+
+    For PRs with multiple JIRA keys, uses the earliest issue creation date.
+    """
+    jira_issue_map = store.get_jira_issue_map()
+    if not jira_issue_map:
+        return {"count": 0, "mean": None, "p50": None, "p90": None, "by_type": []}
+
+    all_hours: list[float] = []
+    by_type: dict[str, list[float]] = defaultdict(list)
+
+    for pr in prs:
+        keys = _parse_json_field(pr.get("jira_keys"))
+        if not keys:
+            continue
+        merged = pr.get("merged_at")
+        if not merged:
+            continue
+
+        earliest_created = None
+        issue_types: set[str] = set()
+        for key in keys:
+            issue = jira_issue_map.get(key)
+            if not issue or not issue.get("created"):
+                continue
+            issue_types.add(issue.get("issue_type") or "Unknown")
+            h = _hours_between(issue["created"], merged)
+            if h is not None and h > 0:
+                if earliest_created is None or h > earliest_created:
+                    earliest_created = h
+
+        if earliest_created is not None:
+            all_hours.append(earliest_created)
+            for itype in issue_types:
+                by_type[itype].append(earliest_created)
+
+    by_type_results = []
+    for itype, hours in sorted(by_type.items()):
+        by_type_results.append({
+            "issue_type": itype,
+            "count": len(hours),
+            "mean": round(statistics.mean(hours), 1) if hours else None,
+            **_percentiles(hours),
+        })
+
+    return {
+        "count": len(all_hours),
+        "mean": round(statistics.mean(all_hours), 1) if all_hours else None,
+        **_percentiles(all_hours),
+        "by_type": by_type_results,
     }

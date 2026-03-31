@@ -127,6 +127,32 @@ CREATE TABLE IF NOT EXISTS ci_test_results (
     PRIMARY KEY (build_id, test_name, test_variant)
 );
 
+CREATE TABLE IF NOT EXISTS jira_issues (
+    key             TEXT PRIMARY KEY,
+    summary         TEXT,
+    issue_type      TEXT,
+    priority        TEXT,
+    status          TEXT,
+    status_category TEXT,
+    assignee        TEXT,
+    components      TEXT,
+    labels          TEXT,
+    fix_versions    TEXT,
+    story_points    REAL,
+    created         TEXT,
+    resolved        TEXT,
+    epic_key        TEXT,
+    description     TEXT,
+    comments        TEXT,
+    fetched_at      TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS jira_collection_issues (
+    collection_name TEXT NOT NULL,
+    issue_key       TEXT NOT NULL,
+    PRIMARY KEY (collection_name, issue_key)
+);
+
 CREATE TABLE IF NOT EXISTS metrics_cache (
     metric      TEXT NOT NULL,
     window      TEXT NOT NULL,
@@ -158,6 +184,8 @@ class Store:
             ("ci_builds", "peak_cpu_cores", "REAL"),
             ("ci_builds", "peak_memory_bytes", "REAL"),
             ("ci_builds", "total_step_seconds", "REAL"),
+            ("jira_issues", "description", "TEXT"),
+            ("jira_issues", "comments", "TEXT"),
         ]
         for table, column, col_type in migrations:
             try:
@@ -464,6 +492,89 @@ class Store:
                ORDER BY avg_risk DESC"""
         ).fetchall()
         return [dict(r) for r in rows]
+
+    # --- JIRA issues ---
+
+    def upsert_jira_issue(self, issue: dict) -> None:
+        self.conn.execute(
+            """INSERT OR REPLACE INTO jira_issues
+               (key, summary, issue_type, priority, status, status_category,
+                assignee, components, labels, fix_versions, story_points,
+                created, resolved, epic_key, description, comments, fetched_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                issue["key"], issue.get("summary"), issue.get("issue_type"),
+                issue.get("priority"), issue.get("status"), issue.get("status_category"),
+                issue.get("assignee"), issue.get("components"), issue.get("labels"),
+                issue.get("fix_versions"), issue.get("story_points"),
+                issue.get("created"), issue.get("resolved"), issue.get("epic_key"),
+                issue.get("description"), issue.get("comments"),
+                issue["fetched_at"],
+            ),
+        )
+        self.conn.commit()
+
+    def get_jira_issues(self, keys: list[str] | None = None) -> list[dict]:
+        if keys is not None:
+            if not keys:
+                return []
+            placeholders = ",".join("?" for _ in keys)
+            rows = self.conn.execute(
+                f"SELECT * FROM jira_issues WHERE key IN ({placeholders}) ORDER BY key",
+                keys,
+            ).fetchall()
+        else:
+            rows = self.conn.execute("SELECT * FROM jira_issues ORDER BY key").fetchall()
+        return [dict(r) for r in rows]
+
+    def get_jira_issue(self, key: str) -> dict | None:
+        row = self.conn.execute(
+            "SELECT * FROM jira_issues WHERE key = ?", (key,),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def get_jira_issue_map(self) -> dict[str, dict]:
+        """Return a dict keyed by issue key for fast lookups."""
+        return {row["key"]: row for row in self.get_jira_issues()}
+
+    def get_fresh_jira_keys(self, max_age_hours: int = 4) -> set[str]:
+        """Return issue keys whose fetched_at is within max_age_hours."""
+        rows = self.conn.execute(
+            """SELECT key FROM jira_issues
+               WHERE fetched_at > datetime('now', ?)""",
+            (f"-{max_age_hours} hours",),
+        ).fetchall()
+        return {r["key"] for r in rows}
+
+    def set_collection_issues(self, collection_name: str, keys: list[str]) -> None:
+        """Replace all membership for a collection."""
+        self.conn.execute(
+            "DELETE FROM jira_collection_issues WHERE collection_name = ?",
+            (collection_name,),
+        )
+        for key in keys:
+            self.conn.execute(
+                "INSERT OR IGNORE INTO jira_collection_issues (collection_name, issue_key) VALUES (?, ?)",
+                (collection_name, key),
+            )
+        self.conn.commit()
+
+    def get_collection_issues(self, collection_name: str) -> list[dict]:
+        """Return full jira_issues rows for a collection."""
+        rows = self.conn.execute(
+            """SELECT ji.* FROM jira_issues ji
+               JOIN jira_collection_issues jci ON ji.key = jci.issue_key
+               WHERE jci.collection_name = ?
+               ORDER BY ji.key""",
+            (collection_name,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_collection_names(self) -> list[str]:
+        rows = self.conn.execute(
+            "SELECT DISTINCT collection_name FROM jira_collection_issues ORDER BY collection_name"
+        ).fetchall()
+        return [r["collection_name"] for r in rows]
 
     def get_metric(self, metric: str, window: str) -> Any | None:
         row = self.conn.execute(

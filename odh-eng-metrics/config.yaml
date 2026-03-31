@@ -23,9 +23,25 @@ downstream:
     - "chore(deps):"
 
 jira:
-  enabled: false
+  enabled: true
+  base_url: https://redhat.atlassian.net
   project: RHOAIENG
   issue_pattern: 'RHOAIENG-\d+'
+  # story_points_field: customfield_12310243
+  # epic_link_field: customfield_12311140
+  collections:
+    - name: ai-bug-bash
+      labels:
+        - ai-triaged
+        - ai-fixable
+        - ai-nonfixable
+        - ai-fully-automated
+        - ai-accelerated-fix
+        - ai-could-not-fix
+        - ai-verification-failed
+        - regressions-found
+      analyzer: bug-bash
+      description: "AI Bug Bash — March 23-27 2026"
 
 per_release:
   min_version: "3.0.0"

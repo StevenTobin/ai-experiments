@@ -1,4 +1,4 @@
-.PHONY: collect report serve dashboard dashboard-down refresh clean ensure-ci-obs help investigate digest failure-patterns export-context
+.PHONY: collect report serve dashboard dashboard-down refresh clean ensure-ci-obs help investigate digest failure-patterns export-context jira-report ci-report
 
 PYTHON ?= python3
 CLI = $(PYTHON) cli.py
@@ -13,21 +13,32 @@ CI_OBS_DIR ?= $(HOME)/git/openshift-ci-observability
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}'
 
-ensure-ci-obs: ## Ensure CI Observability stack (VictoriaMetrics) is running
-	@if curl -sf http://localhost:8428/health >/dev/null 2>&1; then \
-		echo "CI Observability: VictoriaMetrics reachable"; \
-	elif [ -f "$(CI_OBS_DIR)/podman-compose.yml" ]; then \
-		echo "Starting CI Observability stack from $(CI_OBS_DIR)..."; \
-		$(MAKE) -C "$(CI_OBS_DIR)" up; \
-		echo "Waiting for VictoriaMetrics to be ready..."; \
-		for i in 1 2 3 4 5; do \
-			curl -sf http://localhost:8428/health >/dev/null 2>&1 && break; \
-			sleep 2; \
-		done; \
-	else \
-		echo "CI Observability: VictoriaMetrics not reachable at http://localhost:8428"; \
+CI_OBS_CONTAINERS := ci-obs-victoriametrics ci-obs-victorialogs ci-obs-scraper-watch ci-obs-scraper-backfill ci-obs-grafana
+
+ensure-ci-obs: ## Ensure CI Observability stack (all containers) is running
+	@if [ ! -f "$(CI_OBS_DIR)/podman-compose.yml" ]; then \
+		echo "CI Observability: stack not found at $(CI_OBS_DIR)"; \
 		echo "  CI efficiency data will be skipped."; \
 		echo "  To enable: clone openshift-ci-observability and set CI_OBS_DIR, or start it manually."; \
+	else \
+		missing=""; \
+		for c in $(CI_OBS_CONTAINERS); do \
+			if ! podman ps --format '{{.Names}}' 2>/dev/null | grep -q "^$$c$$"; then \
+				missing="$$missing $$c"; \
+			fi; \
+		done; \
+		if [ -z "$$missing" ]; then \
+			echo "CI Observability: all containers running"; \
+		else \
+			echo "CI Observability: missing containers:$$missing"; \
+			echo "Restarting CI Observability stack from $(CI_OBS_DIR)..."; \
+			$(MAKE) -C "$(CI_OBS_DIR)" restart; \
+			echo "Waiting for VictoriaMetrics to be ready..."; \
+			for i in 1 2 3 4 5; do \
+				curl -sf http://localhost:8428/health >/dev/null 2>&1 && break; \
+				sleep 2; \
+			done; \
+		fi; \
 	fi
 
 collect: ensure-ci-obs ## Clone/fetch repos and collect all data from git history
@@ -47,6 +58,12 @@ failure-patterns: ## Analyze recurring failure patterns (DAYS=<n> for lookback, 
 
 export-context: ## Export structured JSON for AI agents (PR=<number> or codebase-wide)
 	$(CLI) export-context $(if $(PR),--pr $(PR),) $(if $(DAYS),--days $(DAYS),) $(if $(OUTPUT),-o $(OUTPUT),)
+
+jira-report: ## Analyze a JIRA collection (COLLECTION=name, JSON=1 for JSON output)
+	$(CLI) jira-report $(COLLECTION) $(if $(JSON),--json-output,)
+
+ci-report: ## Generate HTML CI health report with charts (OUTPUT=path)
+	$(CLI) ci-report $(if $(OUTPUT),-o $(OUTPUT),)
 
 serve: ## Start the Prometheus metrics exporter on :9090 (foreground)
 	$(CLI) serve

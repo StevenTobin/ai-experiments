@@ -548,6 +548,42 @@ def generate(store: Store, weeks_back: int = 1,
         _w("")
 
     # ===================================================================
+    # JIRA Context
+    # ===================================================================
+    jira_issue_map = store.get_jira_issue_map()
+    if jira_issue_map:
+        week_jira_keys: set[str] = set()
+        for p in week_prs:
+            week_jira_keys.update(_parse_json_field(p.get("jira_keys")))
+
+        week_jira_issues = [jira_issue_map[k] for k in week_jira_keys if k in jira_issue_map]
+        if week_jira_issues:
+            type_counts: Counter[str] = Counter()
+            priority_counts: Counter[str] = Counter()
+            blockers: list[dict] = []
+
+            for issue in week_jira_issues:
+                type_counts[issue.get("issue_type") or "Unknown"] += 1
+                prio = issue.get("priority") or "Unknown"
+                priority_counts[prio] += 1
+                if prio in ("Blocker", "Critical") and issue.get("status_category") != "Done":
+                    blockers.append(issue)
+
+            _w("## JIRA Context")
+            _w("")
+            type_parts = [f"{cnt} {t}" for t, cnt in type_counts.most_common()]
+            _w(f"- **Issue types this week:** {', '.join(type_parts)}")
+            prio_parts = [f"{cnt} {p}" for p, cnt in priority_counts.most_common()]
+            _w(f"- **Priorities:** {', '.join(prio_parts)}")
+
+            if blockers:
+                _w(f"- **{len(blockers)} Blocker/Critical issues still open:**")
+                for b in blockers[:5]:
+                    _w(f"  - [{b['key']}] {b.get('summary', '')[:60]} "
+                       f"({b.get('status', 'Unknown')})")
+            _w("")
+
+    # ===================================================================
     # Release Activity
     # ===================================================================
     releases = store.get_releases()
