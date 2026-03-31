@@ -160,10 +160,9 @@ NONFIXABLE_THEMES = {
 # ---------------------------------------------------------------------------
 
 def chart_triage_funnel(issues, baseline_total=None):
-    labels_all = [lbl for i in issues for lbl in _labels(i)]
-    lc = Counter(labels_all)
-    fixable = lc.get("ai-fixable", 0)
-    nonfixable = lc.get("ai-nonfixable", 0)
+    cls_counts = Counter(_classify_issue(i) for i in issues)
+    fixable = cls_counts["fixable_pending"] + cls_counts["automated"] + cls_counts["accelerated"] + cls_counts["could_not_fix"] + cls_counts["verif_failed"]
+    nonfixable = cls_counts["nonfixable"]
     new_count = sum(1 for i in issues
                     if (i.get("created") or "")[:10] > BUG_BASH_START)
     from_backlog = len(issues) - new_count
@@ -182,7 +181,7 @@ def chart_triage_funnel(issues, baseline_total=None):
     values.append(len(issues))
     colors.append("#8e44ad")
 
-    bars += ["Fixable\n(ai-fixable)", "Nonfixable\n(ai-nonfixable)"]
+    bars += ["Fixable", "Nonfixable"]
     values += [fixable, nonfixable]
     colors += ["#2ecc71", "#e74c3c"]
 
@@ -1042,7 +1041,7 @@ def _classify_issue(issue: dict) -> str:
     return "untriaged"
 
 
-def generate_html(issues, charts, analysis, non_bugs=0, baseline_total=None, baseline_by_proj=None):
+def generate_html(issues, charts, analysis, non_bugs=0, baseline_total=None, baseline_by_proj=None, pre_bash_excluded=0):
     # Count unique issues per classification (no double-counting)
     cls_counts = Counter(_classify_issue(i) for i in issues)
     automated = cls_counts["automated"]
@@ -1100,6 +1099,9 @@ def generate_html(issues, charts, analysis, non_bugs=0, baseline_total=None, bas
     # Baseline: use JQL-sourced total if available, otherwise fall back to label-based count
     has_baseline = baseline_total is not None
     total_display = baseline_total if has_baseline else len(issues)
+    total_new = sum(1 for i in issues if (i.get("created") or "")[:10] > BUG_BASH_START)
+    from_backlog_count = len(issues) - total_new
+    backlog_coverage_pct = from_backlog_count / total_display * 100 if total_display else 0
     triage_pct = len(issues) / total_display * 100 if total_display else 0
     if baseline_by_proj is None:
         baseline_by_proj = {}
@@ -1117,6 +1119,24 @@ def generate_html(issues, charts, analysis, non_bugs=0, baseline_total=None, bas
         cov = from_bl / bl * 100 if bl else 0
         if not_reached > 0:
             coverage_rows.append(f"<strong>{proj}</strong>: {not_reached} not reached ({cov:.0f}% covered)")
+
+    # Estimate current backlog size for the tooltip
+    if has_baseline:
+        ai_labelled_pre_bash = len(issues) - total_new
+        untouched = baseline_total - ai_labelled_pre_bash - pre_bash_excluded
+        resolved_during_or_after = sum(1 for i in issues
+                                       if (i.get("created") or "")[:10] <= BUG_BASH_START
+                                       and i.get("resolved"))
+        new_resolved = sum(1 for i in issues
+                           if (i.get("created") or "")[:10] > BUG_BASH_START
+                           and i.get("resolved"))
+        total_resolved = pre_bash_excluded + resolved_during_or_after + new_resolved
+        still_open_ai = ai_labelled_pre_bash - resolved_during_or_after
+        still_open_new = total_new - new_resolved
+        estimated_current = untouched + still_open_ai + still_open_new
+    else:
+        estimated_current = None
+        total_resolved = 0
 
     html = f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8">
@@ -1182,8 +1202,8 @@ def generate_html(issues, charts, analysis, non_bugs=0, baseline_total=None, bas
 <h2 id="exec-summary">1. Executive Summary</h2>
 
 <div class="stat-grid">
-    <div class="stat-box" title="{'All bugs in New/Backlog/Refinement/To Do as of March 22 across RHOAIENG, AIPCC, RHAIENG, INFERENG (from baseline JQL query). This is the full backlog population.' if has_baseline else 'Bugs with ai-* labels only (' + str(non_bugs) + ' non-Bug issues excluded). Run make collect to fetch the full baseline count from JIRA.'}"><div class="number">{total_display}</div><div class="label">Total Issues (Backlog)</div></div>
-    <div class="stat-box purple" title="Issues with ai-* labels in our collection ({len(issues)} of {total_display} total). {raw_triaged_label} have ai-triaged; {missing_triaged} have other ai-* labels but are missing ai-triaged."><div class="number">{len(issues)}</div><div class="label">Triaged by AI ({triage_pct:.0f}%)</div></div>
+    <div class="stat-box" title="{f'Backlog as of March 22: {total_display} bugs in New/Backlog/Refinement/To Do across RHOAIENG, AIPCC, RHAIENG, INFERENG. Estimated current backlog: ~{estimated_current} open ({total_resolved} resolved: {pre_bash_excluded} before bash + {resolved_during_or_after} during/after + {new_resolved} new; {total_new} new bugs filed since Mar 22). {untouched} bugs were not AI-labelled — their resolution status is unknown and assumed still open.' if has_baseline and estimated_current is not None else ('Bugs with ai-* labels only (' + str(non_bugs) + ' non-Bug issues excluded). Run make collect to fetch the full baseline count from JIRA.')}"><div class="number">{total_display}</div><div class="label">Total Issues (Backlog)</div></div>
+    <div class="stat-box purple" title="{'Of the ' + str(total_display) + ' backlog bugs, ' + str(from_backlog_count) + ' (' + f'{backlog_coverage_pct:.0f}' + '%) were AI-labelled. An additional ' + str(total_new) + ' new bugs created after Mar 22 were also triaged, for ' + str(len(issues)) + ' total.' if has_baseline else str(len(issues)) + ' issues with ai-* labels.'} {raw_triaged_label} have ai-triaged; {missing_triaged} have other ai-* labels but are missing ai-triaged."><div class="number">{len(issues)}</div><div class="label">Triaged by AI</div></div>
     <div class="stat-box" title="automated ({automated}) + accelerated ({accelerated}) + could-not-fix ({could_not}) + verif-failed ({verif_fail}) + fixable-pending ({cls_counts['fixable_pending']}). Includes all issues deemed fixable at triage, regardless of outcome."><div class="number">{fixable}</div><div class="label">Fixable</div></div>
     <div class="stat-box red" title="JIRA label filter shows {raw_nf_label}, but {conflicting_nf} issue(s) also have a higher-priority outcome label and are counted there instead. See Appendix for classification rules."><div class="number">{nonfixable}</div><div class="label">Nonfixable</div></div>
 </div>
@@ -1196,8 +1216,10 @@ def generate_html(issues, charts, analysis, non_bugs=0, baseline_total=None, bas
 </div>
 
 <p>Of <strong>{total_display}</strong> bugs in the backlog when the bug bash started (March 22),
-<strong>{len(issues)}</strong> ({triage_pct:.0f}%) were triaged by AI with <code>ai-*</code> labels.
-Of those triaged issues, <strong>{fixable}</strong> ({fixable/len(issues)*100:.0f}%) were
+<strong>{from_backlog_count}</strong> ({backlog_coverage_pct:.0f}%) were triaged by AI with <code>ai-*</code> labels.
+An additional <strong>{total_new}</strong> new bugs created after March 22 were also triaged, bringing the total to
+<strong>{len(issues)}</strong> AI-labelled bugs.
+Of those, <strong>{fixable}</strong> ({fixable/len(issues)*100:.0f}%) were
 deemed fixable, <strong>{nonfixable}</strong> ({nonfixable/len(issues)*100:.0f}%) were deemed nonfixable,
 and <strong>{pending_classification}</strong> ({pending_classification/len(issues)*100:.0f}%) were triaged but not yet classified as fixable or nonfixable.
 Of those {fixable} fixable issues, <strong>{automated}</strong> ({automation_rate:.1f}%) were fully automated
@@ -1210,9 +1232,9 @@ and <strong>{verif_fail}</strong> failed verification.</p>
 still required human involvement. The {accelerated} accelerated-fix issues are the clearest conversion opportunity \u2014
 these were fixable and AI contributed, but couldn\u2019t finish the job alone.
 {f"Additionally, {pending_classification} issues ({pending_classification/len(issues)*100:.0f}%) are still pending fixable/nonfixable classification." if pending_classification else ""}
-{f"""<br><strong>Coverage:</strong> AI triaged {triage_pct:.0f}% of the {total_display} bugs in the backlog &mdash;
-{total_display - len(issues)} bugs were not reached by AI triage.
-Per-project coverage: {", ".join(coverage_rows)}.""" if has_baseline and coverage_rows else (f"<br><strong>Coverage:</strong> AI triaged {triage_pct:.0f}% of the {total_display} bugs in the backlog &mdash; {total_display - len(issues)} bugs were not reached by AI triage." if has_baseline else "")}
+{f"""<br><strong>Coverage:</strong> AI triaged {from_backlog_count} of {total_display} backlog bugs ({backlog_coverage_pct:.0f}%) &mdash;
+{total_display - from_backlog_count} bugs were not reached by AI triage.
+Per-project coverage: {", ".join(coverage_rows)}.""" if has_baseline and coverage_rows else (f"<br><strong>Coverage:</strong> AI triaged {from_backlog_count} of {total_display} backlog bugs ({backlog_coverage_pct:.0f}%) &mdash; {total_display - from_backlog_count} bugs were not reached by AI triage." if has_baseline else "")}
 </div>
 
 <!-- ============================================================ -->
@@ -1729,9 +1751,10 @@ on each <code>make collect</code> run.</p>
 were in an open status (New, Backlog, Refinement, or To Do) on the day the bug bash started (March 22, 2026),
 regardless of whether they had <code>ai-*</code> labels. This count is derived from a separate baseline JQL query
 run during <code>make collect</code>.</p>
-<p>The <strong>Triaged by AI</strong> count ({len(issues)}) is the subset of bugs that were actually processed by AI
-and received <code>ai-*</code> labels. The difference ({total_display - len(issues)}) represents bugs that existed
-in the backlog but were not reached by AI triage during the bug bash period.</p>
+<p>The <strong>Triaged by AI</strong> count ({len(issues)}) comprises <strong>{from_backlog_count}</strong> bugs from the
+original backlog that received <code>ai-*</code> labels ({backlog_coverage_pct:.0f}% of {total_display}), plus
+<strong>{total_new}</strong> new bugs created after March 22 that were also triaged. The remaining
+{total_display - from_backlog_count} backlog bugs were not reached by AI triage.</p>
 
 <h3>Issue Classification</h3>
 <p>Each issue is assigned to exactly <strong>one</strong> category using a priority-based classification.
@@ -1943,7 +1966,8 @@ def main():
     # Generate HTML
     print("Generating HTML report...")
     html = generate_html(issues, charts, analysis, non_bugs=non_bugs,
-                         baseline_total=baseline_total, baseline_by_proj=baseline_by_proj)
+                         baseline_total=baseline_total, baseline_by_proj=baseline_by_proj,
+                         pre_bash_excluded=len(pre_resolved))
 
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(html, encoding="utf-8")
