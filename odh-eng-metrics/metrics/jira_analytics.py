@@ -80,6 +80,12 @@ def compute_base_analytics(issues: list[dict]) -> dict:
     for issue in issues:
         assignee_counts[issue.get("assignee") or "Unassigned"] += 1
 
+    # Project distribution (derived from issue key prefix)
+    project_counts: Counter[str] = Counter()
+    for issue in issues:
+        key = issue.get("key", "")
+        project_counts[key.rsplit("-", 1)[0] if "-" in key else "Unknown"] += 1
+
     # Component distribution
     component_counts: Counter[str] = Counter()
     for issue in issues:
@@ -137,6 +143,7 @@ def compute_base_analytics(issues: list[dict]) -> dict:
     return {
         "total": total,
         "empty": False,
+        "project_distribution": _counter_to_list(project_counts),
         "status_distribution": _counter_to_list(status_counts),
         "status_category_distribution": _counter_to_list(status_cat_counts),
         "type_distribution": _counter_to_list(type_counts),
@@ -232,7 +239,8 @@ def analyze_bug_bash(issues: list[dict], collection_cfg: dict | None = None) -> 
     # Key rates
     success_count = sum(outcome_counts.get(l, 0) for l in SUCCESS_LABELS)
     failure_count = sum(outcome_counts.get(l, 0) for l in FAILURE_LABELS)
-    ai_success_rate = round(success_count / outcome_total * 100, 1) if outcome_total else 0
+    automated_count = outcome_counts.get("ai-fully-automated", 0)
+    automation_rate = round(automated_count / len(fixable) * 100, 1) if fixable else 0
     fixable_completion = round(outcome_total / len(fixable) * 100, 1) if fixable else 0
 
     # Severity profile
@@ -249,6 +257,9 @@ def analyze_bug_bash(issues: list[dict], collection_cfg: dict | None = None) -> 
     # Regressions introduced
     regression_count = outcome_counts.get("regressions-found", 0)
 
+    # Per-project breakdown
+    project_breakdown = _bug_bash_by_project(issues, SUCCESS_LABELS, FAILURE_LABELS, OUTCOME_LABELS)
+
     return {
         "available": True,
         "triage_funnel": triage_funnel,
@@ -261,13 +272,60 @@ def analyze_bug_bash(issues: list[dict], collection_cfg: dict | None = None) -> 
             "awaiting_outcome": len(no_outcome_yet),
             "ai_success_count": success_count,
             "ai_failure_count": failure_count,
-            "ai_success_rate": ai_success_rate,
+            "ai_automated_count": automated_count,
+            "automation_rate": automation_rate,
             "fixable_completion_pct": fixable_completion,
             "regressions": regression_count,
         },
         "severity_profile": _counter_to_list(severity_profile),
         "top_fixers": _counter_to_list(fixer_counts),
+        "by_project": project_breakdown,
     }
+
+
+def _bug_bash_by_project(
+    issues: list[dict],
+    success_labels: set[str],
+    failure_labels: set[str],
+    outcome_labels: set[str],
+) -> list[dict]:
+    """Compute bug bash funnel metrics broken down by JIRA project."""
+    by_proj: dict[str, list[dict]] = defaultdict(list)
+    for issue in issues:
+        key = issue.get("key", "")
+        proj = key.rsplit("-", 1)[0] if "-" in key else "Unknown"
+        by_proj[proj].append(issue)
+
+    results = []
+    for proj, proj_issues in sorted(by_proj.items(), key=lambda x: -len(x[1])):
+        total = len(proj_issues)
+        triaged = fixable = nonfixable = automated = accelerated = 0
+
+        for issue in proj_issues:
+            labels = set(_parse_json_field(issue.get("labels")))
+            if "ai-triaged" in labels:
+                triaged += 1
+            if "ai-fixable" in labels:
+                fixable += 1
+            if "ai-nonfixable" in labels:
+                nonfixable += 1
+            if "ai-fully-automated" in labels:
+                automated += 1
+            if "ai-accelerated-fix" in labels:
+                accelerated += 1
+
+        results.append({
+            "project": proj,
+            "total": total,
+            "triaged": triaged,
+            "fixable": fixable,
+            "nonfixable": nonfixable,
+            "automated": automated,
+            "accelerated": accelerated,
+            "automation_rate": round(automated / fixable * 100, 1) if fixable else 0,
+            "accelerated_rate": round(accelerated / fixable * 100, 1) if fixable else 0,
+        })
+    return results
 
 
 ANALYZERS: dict[str, Any] = {

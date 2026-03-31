@@ -11,7 +11,7 @@ from pathlib import Path
 import click
 import yaml
 
-from collector import ai_commit_detector, branch_tracker, cherry_pick_detector, ci_collector, code_analyzer, jira_collector, pr_collector, revert_detector, tag_collector
+from collector import agentready_collector, ai_commit_detector, branch_tracker, cherry_pick_detector, ci_collector, code_analyzer, jira_collector, pr_collector, revert_detector, tag_collector
 from collector.repo_manager import ensure_repos
 from metrics.calculator import compute_all
 from store.db import Store
@@ -40,7 +40,8 @@ def cli(verbose: bool) -> None:
 
 
 @cli.command()
-def collect() -> None:
+@click.option("--force", is_flag=True, help="Re-collect data even if it already exists")
+def collect(force: bool) -> None:
     """Clone/fetch repos and collect all data from git history (+ 1 API call for releases)."""
     cfg = _load_config()
     data_dir = Path(cfg["collection"]["data_dir"])
@@ -96,7 +97,7 @@ def collect() -> None:
         click.echo("  no CI data (CI Observability stack may not be running)")
 
     click.echo("Analyzing code risk (hotspots/gocyclo)...")
-    n = code_analyzer.analyze_code_risk(store, upstream_path, repo_name)
+    n = code_analyzer.analyze_code_risk(store, upstream_path, repo_name, force=force)
     if n > 0:
         click.echo(f"  {n} function risk scores stored")
     else:
@@ -121,8 +122,33 @@ def collect() -> None:
             n = jira_collector.collect_collection(store, cfg, coll)
             click.echo(f"  {n} issues in collection")
 
+    for coll in cfg.get("jira", {}).get("collections", []):
+        if coll.get("project_repos"):
+            click.echo(f"Running readiness assessments for '{coll['name']}'...")
+            n = agentready_collector.collect_assessments(store, cfg, collection_name=coll["name"], force=force)
+            if n > 0:
+                click.echo(f"  {n} repo(s) assessed")
+            else:
+                click.echo("  no repos to assess (already cached or check project_repos config)")
+
     store.close()
     click.echo("Collection complete.")
+
+
+@cli.command()
+@click.option("--collection", default="ai-bug-bash", help="Collection name to assess")
+@click.option("--force", is_flag=True, help="Re-assess even if data already exists")
+def agentready(collection: str, force: bool) -> None:
+    """Run AI Bug Automation Readiness assessments on repos mapped to JIRA projects."""
+    cfg = _load_config()
+    store = Store(cfg["collection"]["cache_db"])
+    click.echo(f"Running readiness assessments for '{collection}'...")
+    n = agentready_collector.collect_assessments(store, cfg, collection_name=collection, force=force)
+    store.close()
+    if n:
+        click.echo(f"  {n} repo(s) assessed and stored.")
+    else:
+        click.echo("  No assessments produced (check config project_repos).")
 
 
 @cli.command()

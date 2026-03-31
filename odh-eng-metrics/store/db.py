@@ -160,6 +160,18 @@ CREATE TABLE IF NOT EXISTS metrics_cache (
     computed_at TEXT NOT NULL,
     PRIMARY KEY (metric, window)
 );
+
+CREATE TABLE IF NOT EXISTS agentready_assessments (
+    repo_url            TEXT NOT NULL,
+    project             TEXT NOT NULL,
+    overall_score       REAL NOT NULL,
+    certification_level TEXT NOT NULL,
+    attributes_assessed INTEGER NOT NULL DEFAULT 0,
+    attributes_total    INTEGER NOT NULL DEFAULT 0,
+    findings_json       TEXT,
+    assessed_at         TEXT NOT NULL,
+    PRIMARY KEY (repo_url, project)
+);
 """
 
 
@@ -582,6 +594,32 @@ class Store:
             (metric, window),
         ).fetchone()
         return json.loads(row["value"]) if row else None
+
+    # --- AgentReady assessments ---
+
+    def upsert_agentready_assessment(self, repo_url: str, project: str,
+                                     overall_score: float, certification_level: str,
+                                     attributes_assessed: int, attributes_total: int,
+                                     findings_json: str, assessed_at: str) -> None:
+        self.conn.execute(
+            """INSERT OR REPLACE INTO agentready_assessments
+               (repo_url, project, overall_score, certification_level,
+                attributes_assessed, attributes_total, findings_json, assessed_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (repo_url, project, overall_score, certification_level,
+             attributes_assessed, attributes_total, findings_json, assessed_at),
+        )
+        self.conn.commit()
+
+    def get_agentready_assessments(self, project: str | None = None) -> list[dict]:
+        q = "SELECT * FROM agentready_assessments"
+        params: list[Any] = []
+        if project:
+            q += " WHERE project = ?"
+            params.append(project)
+        q += " ORDER BY project, repo_url"
+        rows = self.conn.execute(q, params).fetchall()
+        return [dict(r) for r in rows]
 
     def close(self) -> None:
         self.conn.close()

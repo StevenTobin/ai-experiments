@@ -69,6 +69,15 @@ def render_text(result: dict) -> str:
         lines.append("  No issues in this collection.")
         return "\n".join(lines)
 
+    # Project distribution (show early when multi-project)
+    projects = result.get("project_distribution", [])
+    if len(projects) > 1:
+        lines.append("")
+        lines.append("PROJECTS")
+        lines.append("-" * 40)
+        for entry in projects:
+            lines.append(f"  {entry['name']:<20s} {entry['count']:>4d}  ({entry['pct']}%)")
+
     total = result["total"]
     res_rate = result["resolution_rate"]
     res_time = result.get("resolution_time_hours", {})
@@ -156,11 +165,11 @@ def render_text(result: dict) -> str:
         lines.append(f"  Awaiting outcome:     {summary.get('awaiting_outcome', 0):>4d}")
 
         lines.append("")
-        lines.append("AI SUCCESS RATE")
+        lines.append("AUTOMATION RATE (fully automated / fixable)")
         lines.append("-" * 40)
-        lines.append(f"  AI successes:         {summary.get('ai_success_count', 0):>4d}")
-        lines.append(f"  AI failures:          {summary.get('ai_failure_count', 0):>4d}")
-        lines.append(f"  Success rate:         {summary.get('ai_success_rate', 0):>5.1f}%")
+        lines.append(f"  Fully automated:      {summary.get('ai_automated_count', 0):>4d}")
+        lines.append(f"  Fixable:              {summary.get('fixable', 0):>4d}")
+        lines.append(f"  Automation rate:      {summary.get('automation_rate', 0):>5.1f}%")
         if summary.get("regressions", 0) > 0:
             lines.append(f"  Regressions found:    {summary['regressions']:>4d}")
 
@@ -184,6 +193,26 @@ def render_text(result: dict) -> str:
             lines.append("-" * 40)
             for stage in triage_funnel:
                 lines.append(f"  {stage['stage']:<25s} {stage['count']:>4d}  ({stage['pct']}%)")
+
+        by_project = specialized.get("by_project", [])
+        if by_project and len(by_project) > 1:
+            lines.append("")
+            lines.append("BY PROJECT")
+            lines.append("-" * 40)
+            header = (
+                f"  {'Project':<12s} {'Total':>5s} {'Triaged':>7s} "
+                f"{'Fixable':>7s} {'Nonfixable':>10s} {'Auto':>5s} "
+                f"{'Auto%':>6s} {'Accel':>5s} {'Accel%':>6s}"
+            )
+            lines.append(header)
+            lines.append("  " + "-" * 68)
+            for p in by_project:
+                lines.append(
+                    f"  {p['project']:<12s} {p['total']:>5d} {p['triaged']:>7d} "
+                    f"{p['fixable']:>7d} {p['nonfixable']:>10d} {p['automated']:>5d} "
+                    f"{p['automation_rate']:>5.1f}% {p['accelerated']:>5d} "
+                    f"{p['accelerated_rate']:>5.1f}%"
+                )
 
         severity = specialized.get("severity_profile", [])
         if severity:

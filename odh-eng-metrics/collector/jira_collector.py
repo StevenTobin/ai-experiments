@@ -430,6 +430,22 @@ def _discover_labels_by_prefix(client: httpx.Client, prefix: str, cfg: dict | No
     return labels
 
 
+def _project_clause(cfg: dict, collection: dict) -> str:
+    """Build the project filter for a collection's JQL.
+
+    If the collection defines ``projects`` (a list), uses
+    ``project in ("A", "B", ...)``.  Otherwise falls back to the
+    top-level ``jira.project`` as ``project = X``.
+    """
+    projects = collection.get("projects")
+    if projects and len(projects) > 1:
+        proj_list = ", ".join(f'"{p}"' for p in projects)
+        return f"project in ({proj_list})"
+    if projects:
+        return f"project = {projects[0]}"
+    return f"project = {cfg.get('jira', {}).get('project', 'RHOAIENG')}"
+
+
 def _build_collection_jql(
     cfg: dict, collection: dict, client: httpx.Client | None = None,
 ) -> str | None:
@@ -440,8 +456,11 @@ def _build_collection_jql(
       2. ``label_prefix`` — discovers matching labels via the JIRA
          autocomplete API, then uses ``labels in (...)``
       3. ``labels`` — explicit label list via ``labels in (...)``
+
+    Collections can optionally specify ``projects`` (list) to search
+    across multiple JIRA projects instead of the default single project.
     """
-    project = cfg.get("jira", {}).get("project", "RHOAIENG")
+    proj = _project_clause(cfg, collection)
 
     if collection.get("jql"):
         return collection["jql"]
@@ -460,14 +479,14 @@ def _build_collection_jql(
             )
             return None
         label_list = ", ".join(f'"{lbl}"' for lbl in discovered)
-        return f"project = {project} AND labels in ({label_list})"
+        return f"{proj} AND labels in ({label_list})"
 
     labels = collection.get("labels", [])
     if not labels:
         return None
 
     label_list = ", ".join(f'"{lbl}"' for lbl in labels)
-    return f"project = {project} AND labels in ({label_list})"
+    return f"{proj} AND labels in ({label_list})"
 
 
 COLLECTION_FRESHNESS_HOURS = 4
@@ -521,4 +540,76 @@ def collect_collection(store: Store, cfg: dict, collection: dict) -> int:
         client.close()
 
     store.set_collection_issues(name, keys)
+
+    if collection.get("baseline_jql"):
+        _collect_baseline_count(store, cfg, collection)
+
     return len(keys)
+
+
+def _count_jql(client: httpx.Client, jql: str, cfg: dict) -> int:
+    """Run a JQL query and return only the total count (no issue data).
+
+    On Atlassian Cloud the only working search endpoint is
+    POST ``/rest/api/3/search/jql`` which does NOT include a ``total`` field.
+    We paginate through all results requesting only the ``key`` field with a
+    large page size to minimize round-trips.
+    On Server/DC we use the POST v2 endpoint which returns ``total`` directly.
+    """
+    cloud = _is_cloud(cfg)
+    if not cloud:
+        body = {"jql": jql, "fields": ["key"], "maxResults": 0}
+        resp = _rate_limited_request(client, "POST", "/rest/api/2/search", json=body)
+        resp.raise_for_status()
+        return resp.json().get("total", 0)
+
+    count = 0
+    next_token: str | None = None
+    while True:
+        body: dict[str, Any] = {
+            "jql": jql,
+            "fields": ["key"],
+            "maxResults": 5000,
+        }
+        if next_token:
+            body["nextPageToken"] = next_token
+
+        resp = _rate_limited_request(client, "POST", "/rest/api/3/search/jql", json=body)
+        resp.raise_for_status()
+        data = resp.json()
+        issues = data.get("issues", [])
+        count += len(issues)
+
+        if data.get("isLast", True) or not issues:
+            break
+        next_token = data.get("nextPageToken")
+        if not next_token:
+            break
+
+    return count
+
+
+def _collect_baseline_count(store: Store, cfg: dict, collection: dict) -> None:
+    """Fetch the baseline bug population count and per-project counts."""
+    baseline_jql = collection["baseline_jql"]
+    name = collection["name"]
+
+    client = _build_client(cfg)
+    if client is None:
+        return
+
+    try:
+        total = _count_jql(client, baseline_jql, cfg)
+        store.save_metric("baseline_total", name, total)
+        log.info("Baseline total for '%s': %d issues", name, total)
+
+        for proj_key in collection.get("projects", []):
+            proj_jql = f"project = {proj_key} AND issuetype = Bug AND created <= 2026-03-22 AND (status in (New, Backlog, Refinement, \"To Do\") OR status changed from (New, Backlog, Refinement, \"To Do\") after 2026-03-22)"
+            try:
+                count = _count_jql(client, proj_jql, cfg)
+                store.save_metric("baseline_total", f"{name}:{proj_key}", count)
+                log.info("  %s: %d issues", proj_key, count)
+            except Exception as e:
+                log.warning("Failed to get baseline for %s: %s", proj_key, e)
+    finally:
+        client.close()

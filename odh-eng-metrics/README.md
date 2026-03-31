@@ -146,6 +146,10 @@ make export-context OUTPUT=ctx.json  # write to file
 make ci-report                   # → data/ci-health-report.html
 make ci-report OUTPUT=report.html  # custom path
 
+# Bug bash deep analysis report with charts and recommendations
+make bug-bash-report                    # → data/bug-bash-deep-analysis.html
+make bug-bash-report OUTPUT=report.html # custom path
+
 # JIRA collection analysis (requires JIRA_TOKEN + collections in config.yaml)
 make jira-report COLLECTION=ai-bug-bash
 make jira-report COLLECTION=ai-bug-bash JSON=1  # JSON output

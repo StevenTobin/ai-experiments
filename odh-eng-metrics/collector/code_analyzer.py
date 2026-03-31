@@ -96,8 +96,18 @@ def analyze_code_risk(
     store: Store,
     repo_path: Path,
     repo_name: str,
+    force: bool = False,
 ) -> int:
-    """Run code risk analysis and store results."""
+    """Run code risk analysis and store results.
+
+    Skips if scores already exist for this repo (unless force=True).
+    """
+    if not force:
+        existing = store.get_code_risk_scores(repo=repo_name)
+        if existing:
+            log.info("Code risk scores already collected (%d functions) — skipping", len(existing))
+            return 0
+
     now = datetime.now(timezone.utc).isoformat()
     count = 0
 

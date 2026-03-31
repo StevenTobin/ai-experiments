@@ -1,4 +1,4 @@
-.PHONY: collect report serve dashboard dashboard-down refresh clean ensure-ci-obs help investigate digest failure-patterns export-context jira-report ci-report
+.PHONY: collect report serve dashboard dashboard-down refresh clean ensure-ci-obs help investigate digest failure-patterns export-context jira-report ci-report bug-bash-report agentready
 
 PYTHON ?= python3
 CLI = $(PYTHON) cli.py
@@ -41,8 +41,8 @@ ensure-ci-obs: ## Ensure CI Observability stack (all containers) is running
 		fi; \
 	fi
 
-collect: ensure-ci-obs ## Clone/fetch repos and collect all data from git history
-	$(CLI) collect
+collect: ensure-ci-obs ## Clone/fetch repos and collect all data from git history (FORCE=true to re-collect)
+	$(CLI) collect $(if $(FORCE),--force,)
 
 report: ## Print an engineering metrics summary to the terminal
 	$(CLI) report
@@ -64,6 +64,12 @@ jira-report: ## Analyze a JIRA collection (COLLECTION=name, JSON=1 for JSON outp
 
 ci-report: ## Generate HTML CI health report with charts (OUTPUT=path)
 	$(CLI) ci-report $(if $(OUTPUT),-o $(OUTPUT),)
+
+bug-bash-report: ## Generate HTML deep-analysis report for the AI Bug Bash (OUTPUT=path)
+	$(PYTHON) generate_bug_bash_report.py $(if $(OUTPUT),$(OUTPUT),)
+
+agentready: ## Run AgentReady assessments on repos mapped to JIRA projects (COLLECTION=name)
+	$(CLI) agentready $(if $(COLLECTION),--collection $(COLLECTION),)
 
 serve: ## Start the Prometheus metrics exporter on :9090 (foreground)
 	$(CLI) serve

@@ -90,6 +90,7 @@ make investigate       # Per-PR investigation (PR=<number>)
 make export-context    # JSON for AI agents (PR=<n>, DAYS=<n>, OUTPUT=<file>)
 make jira-report       # JIRA collection analytics (COLLECTION=<name>, JSON=1)
 make ci-report         # HTML CI health report (week/month/3mo) → data/ci-health-report.html
+make bug-bash-report   # HTML deep analysis for AI Bug Bash → data/bug-bash-deep-analysis.html
 make serve             # Prometheus exporter on :9090
 make dashboard         # Start Grafana (:3001) + Prometheus (:9091)
 make dashboard-down    # Stop dashboard stack

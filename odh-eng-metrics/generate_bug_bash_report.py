@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate a deep-analysis HTML report on the AI Bug Bash with embedded charts."""
+"""Generate a deep-analysis HTML report on the AI First Bug Bash with embedded charts."""
 
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
+from matplotlib.patches import Patch
 
 from store.db import Store
 
@@ -158,18 +159,33 @@ NONFIXABLE_THEMES = {
 # Chart generators
 # ---------------------------------------------------------------------------
 
-def chart_triage_funnel(issues):
+def chart_triage_funnel(issues, baseline_total=None):
     labels_all = [lbl for i in issues for lbl in _labels(i)]
     lc = Counter(labels_all)
-    triaged = lc.get("ai-triaged", 0)
     fixable = lc.get("ai-fixable", 0)
     nonfixable = lc.get("ai-nonfixable", 0)
-    untriaged = len(issues) - triaged
+    new_count = sum(1 for i in issues
+                    if (i.get("created") or "")[:10] > BUG_BASH_START)
+    from_backlog = len(issues) - new_count
 
-    fig, ax = plt.subplots(figsize=(8, 4))
-    bars = ["Total\nIssues", "Triaged", "Fixable", "Nonfixable", "Untriaged"]
-    values = [len(issues), triaged, fixable, nonfixable, untriaged]
-    colors = ["#34495e", "#2980b9", "#2ecc71", "#e74c3c", "#95a5a6"]
+    fig, ax = plt.subplots(figsize=(8, 5.5))
+    bars = []
+    values = []
+    colors = []
+
+    if baseline_total is not None:
+        bars.append("Bug Backlog\n(as of Mar 22)")
+        values.append(baseline_total)
+        colors.append("#1a252f")
+
+    bars.append(f"AI Labelled\n({from_backlog} backlog + {new_count} new)")
+    values.append(len(issues))
+    colors.append("#8e44ad")
+
+    bars += ["Fixable\n(ai-fixable)", "Nonfixable\n(ai-nonfixable)"]
+    values += [fixable, nonfixable]
+    colors += ["#2ecc71", "#e74c3c"]
+
     b = ax.barh(bars, values, color=colors, height=0.6)
     ax.bar_label(b, padding=5, fontsize=12, fontweight="bold")
     ax.set_xlim(0, max(values) * 1.15)
@@ -197,11 +213,11 @@ def chart_outcome_distribution(issues):
     return _fig_to_base64(fig)
 
 
-def chart_nonfixable_by_component(nonfixable_issues):
+def _chart_nonfixable_by_component_single(issues, title):
+    """Render a single nonfixable-by-component horizontal bar chart."""
     comp_counts = Counter()
-    for i in nonfixable_issues:
-        comps = _components(i)
-        for c in comps:
+    for i in issues:
+        for c in _components(i):
             comp_counts[c] += 1
     top = comp_counts.most_common(12)
     if not top:
@@ -211,18 +227,29 @@ def chart_nonfixable_by_component(nonfixable_issues):
     bars = ax.barh(names, counts, color="#e74c3c", alpha=0.85, height=0.6)
     ax.bar_label(bars, padding=4, fontsize=10)
     ax.set_xlim(0, max(counts) * 1.2)
-    ax.set_title("Nonfixable Issues by Component", fontsize=13, fontweight="bold", pad=10)
+    ax.set_title(title, fontsize=13, fontweight="bold", pad=10)
     return _fig_to_base64(fig)
 
 
-def chart_nonfixable_themes(nonfixable_issues):
+def chart_nonfixable_by_component(nonfixable_issues):
+    """Return dict: {total: b64, PROJ: b64, ...}."""
+    by_proj: dict[str, list] = defaultdict(list)
+    for i in nonfixable_issues:
+        by_proj[_project_of(i)].append(i)
+
+    result = {"total": _chart_nonfixable_by_component_single(
+        nonfixable_issues, "Nonfixable Issues by Component — All Projects")}
+    for proj in sorted(by_proj):
+        result[proj] = _chart_nonfixable_by_component_single(
+            by_proj[proj], f"Nonfixable Issues by Component — {proj}")
+    return result
+
+
+def _chart_nonfixable_themes_single(issues, title):
+    """Render a single nonfixable-themes horizontal bar chart."""
     theme_counts = {}
     for theme_name, patterns in NONFIXABLE_THEMES.items():
-        count = 0
-        for issue in nonfixable_issues:
-            blob = _text_blob(issue)
-            if any(re.search(p, blob) for p in patterns):
-                count += 1
+        count = sum(1 for i in issues if any(re.search(p, _text_blob(i)) for p in patterns))
         if count > 0:
             theme_counts[theme_name] = count
 
@@ -230,19 +257,35 @@ def chart_nonfixable_themes(nonfixable_issues):
     if not sorted_themes:
         return None
     names, counts = zip(*sorted_themes)
-    total = len(nonfixable_issues)
+    total = len(issues)
     pcts = [c / total * 100 for c in counts]
 
     fig, ax = plt.subplots(figsize=(10, 5))
     bars = ax.barh(list(reversed(names)), list(reversed(pcts)), color="#c0392b", alpha=0.8, height=0.6)
-    ax.bar_label(bars, labels=[f"{p:.0f}% ({c})" for p, c in zip(reversed(pcts), reversed(counts))], padding=5, fontsize=10)
+    ax.bar_label(bars, labels=[f"{p:.0f}% ({c})" for p, c in zip(reversed(pcts), reversed(counts))],
+                 padding=5, fontsize=10)
     ax.set_xlim(0, max(pcts) * 1.25)
     ax.set_xlabel("% of nonfixable issues")
-    ax.set_title("Why Are Tickets Nonfixable? — Theme Analysis", fontsize=13, fontweight="bold", pad=10)
+    ax.set_title(title, fontsize=13, fontweight="bold", pad=10)
     return _fig_to_base64(fig)
 
 
-def chart_fixable_vs_nonfixable_components(fixable, nonfixable):
+def chart_nonfixable_themes(nonfixable_issues):
+    """Return dict: {total: b64, PROJ: b64, ...}."""
+    by_proj: dict[str, list] = defaultdict(list)
+    for i in nonfixable_issues:
+        by_proj[_project_of(i)].append(i)
+
+    result = {"total": _chart_nonfixable_themes_single(
+        nonfixable_issues, "Why Are Tickets Nonfixable? — All Projects")}
+    for proj in sorted(by_proj):
+        result[proj] = _chart_nonfixable_themes_single(
+            by_proj[proj], f"Why Are Tickets Nonfixable? — {proj}")
+    return result
+
+
+def _chart_fixable_vs_nonfixable_single(fixable, nonfixable, title, min_total=5):
+    """Render a single fixable-vs-nonfixable horizontal bar chart."""
     fix_comps = Counter(c for i in fixable for c in _components(i))
     nonfix_comps = Counter(c for i in nonfixable for c in _components(i))
     all_comps = set(fix_comps) | set(nonfix_comps)
@@ -251,7 +294,7 @@ def chart_fixable_vs_nonfixable_components(fixable, nonfixable):
         fc = fix_comps.get(comp, 0)
         nc = nonfix_comps.get(comp, 0)
         total = fc + nc
-        if total >= 5:
+        if total >= min_total:
             rate = nc / total * 100
             data.append((comp, fc, nc, rate))
     data.sort(key=lambda x: x[3], reverse=True)
@@ -270,12 +313,31 @@ def chart_fixable_vs_nonfixable_components(fixable, nonfixable):
     ax.set_yticks([yi + 0.2 for yi in y])
     ax.set_yticklabels(names)
     ax.legend(loc="lower right")
-    ax.set_title("Fixable vs Nonfixable by Component (sorted by nonfixable rate)", fontsize=13, fontweight="bold", pad=10)
+    ax.set_title(title, fontsize=13, fontweight="bold", pad=10)
 
     for idx, d in enumerate(reversed(top)):
         ax.annotate(f"{d[3]:.0f}% nonfixable", xy=(max(d[1], d[2]) + 1, idx + 0.2),
                      fontsize=9, color="#7f8c8d", va="center")
     return _fig_to_base64(fig)
+
+
+def chart_fixable_vs_nonfixable_components(fixable, nonfixable):
+    """Return dict: {total: b64, PROJ: b64, ...}."""
+    by_proj_fix: dict[str, list] = defaultdict(list)
+    by_proj_nf: dict[str, list] = defaultdict(list)
+    for i in fixable:
+        by_proj_fix[_project_of(i)].append(i)
+    for i in nonfixable:
+        by_proj_nf[_project_of(i)].append(i)
+
+    projects = sorted(set(by_proj_fix) | set(by_proj_nf))
+    result = {"total": _chart_fixable_vs_nonfixable_single(
+        fixable, nonfixable, "Fixable vs Nonfixable by Component — All Projects")}
+    for proj in projects:
+        result[proj] = _chart_fixable_vs_nonfixable_single(
+            by_proj_fix.get(proj, []), by_proj_nf.get(proj, []),
+            f"Fixable vs Nonfixable by Component — {proj}", min_total=2)
+    return result
 
 
 def chart_accelerated_vs_automated(accelerated, automated):
@@ -299,37 +361,32 @@ def chart_accelerated_vs_automated(accelerated, automated):
     return _fig_to_base64(fig)
 
 
-def chart_daily_throughput(issues):
-    daily = defaultdict(lambda: {"total": 0, "outcomes": Counter()})
-    for i in issues:
-        resolved = i.get("resolved")
-        if not resolved:
-            continue
-        day = resolved[:10]
-        daily[day]["total"] += 1
-        for lbl in _labels(i):
-            if lbl in OUTCOME_LABELS:
-                daily[day]["outcomes"][lbl] += 1
+def chart_issue_pipeline(issues):
+    """Where are all issues in the pipeline today?"""
+    cls = Counter(_classify_issue(i) for i in issues)
+    stages = [
+        ("Fully Automated", cls["automated"], "#2ecc71"),
+        ("Accelerated Fix", cls["accelerated"], "#3498db"),
+        ("Could Not Fix", cls["could_not_fix"], "#e74c3c"),
+        ("Verif Failed", cls["verif_failed"], "#e67e22"),
+        ("Fixable (pending)", cls["fixable_pending"], "#f1c40f"),
+        ("Nonfixable", cls["nonfixable"], "#c0392b"),
+        ("Triaged Only", cls["triaged_only"], "#95a5a6"),
+        ("Untriaged", cls["untriaged"], "#bdc3c7"),
+    ]
+    stages = [(s, v, c) for s, v, c in stages if v > 0]
 
-    if not daily:
-        return None
-    days = sorted(daily.keys())
-
-    fig, ax = plt.subplots(figsize=(12, 4))
-    totals = [daily[d]["total"] for d in days]
-    ax.bar(days, totals, color="#2980b9", alpha=0.7, label="Resolved")
-
-    bottom = [0] * len(days)
-    for lbl in OUTCOME_LABELS:
-        vals = [daily[d]["outcomes"].get(lbl, 0) for d in days]
-        if sum(vals) > 0:
-            ax.bar(days, vals, bottom=bottom, color=OUTCOME_COLORS.get(lbl, "#bdc3c7"),
-                   alpha=0.9, label=lbl.replace("ai-", "").replace("-", " ").title())
-            bottom = [b + v for b, v in zip(bottom, vals)]
-
-    ax.set_title("Daily Resolution Throughput", fontsize=13, fontweight="bold", pad=10)
-    ax.legend(fontsize=8, loc="upper left")
-    plt.xticks(rotation=45, ha="right", fontsize=8)
+    fig, ax = plt.subplots(figsize=(10, max(3, len(stages) * 0.7)))
+    labels = [s[0] for s in stages]
+    values = [s[1] for s in stages]
+    colors = [s[2] for s in stages]
+    bars = ax.barh(labels, values, color=colors, height=0.6)
+    ax.bar_label(bars, padding=5, fontsize=11, fontweight="bold",
+                 labels=[f"{v}  ({v/len(issues)*100:.0f}%)" for v in values])
+    ax.set_xlim(0, max(values) * 1.4)
+    ax.invert_yaxis()
+    ax.set_title(f"Issue Pipeline: Where Are the {len(issues)} Issues Today?",
+                 fontsize=13, fontweight="bold", pad=10)
     return _fig_to_base64(fig)
 
 
@@ -351,39 +408,51 @@ def chart_priority_breakdown(fixable, nonfixable):
     return _fig_to_base64(fig)
 
 
-def chart_success_rate_gauge(automated, accelerated, could_not_fix, verification_failed):
-    successes = len(automated) + len(accelerated)
-    failures = len(could_not_fix) + len(verification_failed)
-    total = successes + failures
-    rate = successes / total * 100 if total > 0 else 0
+def chart_automation_rate(fixable_issues, automated_issues, accelerated_issues,
+                          could_not_fix_issues, verification_failed_issues):
+    n_fixable = len(fixable_issues)
+    n_auto = len(automated_issues)
+    n_accel = len(accelerated_issues)
+    n_cnf = len(could_not_fix_issues)
+    n_vf = len(verification_failed_issues)
+    n_pending = n_fixable - n_auto - n_accel - n_cnf - n_vf
+    rate = n_auto / n_fixable * 100 if n_fixable > 0 else 0
 
-    fig, ax = plt.subplots(figsize=(5, 3))
-    ax.barh(["AI Success", "AI Failure"], [successes, failures],
-            color=["#2ecc71", "#e74c3c"], height=0.5)
-    ax.bar_label(ax.containers[0], padding=5, fontsize=12, fontweight="bold")
-    ax.set_title(f"AI Success Rate: {rate:.1f}%", fontsize=14, fontweight="bold", pad=10)
-    ax.set_xlim(0, max(successes, failures) * 1.3)
+    fig, ax = plt.subplots(figsize=(8, 3.5))
+    categories = ["Fully Automated", "Accelerated Fix", "Could Not Fix",
+                   "Verif Failed", "Pending"]
+    values = [n_auto, n_accel, n_cnf, n_vf, max(n_pending, 0)]
+    colors = ["#2ecc71", "#3498db", "#e74c3c", "#e67e22", "#95a5a6"]
+    bars = ax.barh(categories, values, color=colors, height=0.55)
+    ax.bar_label(bars, padding=5, fontsize=11, fontweight="bold")
+    ax.set_xlim(0, max(values) * 1.3 if max(values) > 0 else 1)
+    ax.set_title(f"Fixable Issue Outcomes ({n_fixable} fixable, {rate:.1f}% fully automated)",
+                 fontsize=13, fontweight="bold", pad=10)
+    ax.invert_yaxis()
     return _fig_to_base64(fig)
 
 
-BUG_BASH_START = "2026-03-23"
-BUG_BASH_END = "2026-03-27"
+BUG_BASH_START = "2026-03-22"
+BUG_BASH_END = "2026-03-29"
 
 
 def _split_by_period(issues):
-    """Split issues into bug-bash-week, after, and unresolved."""
+    """Split issues into bug-bash-week, before-bash, after-bash, and unresolved."""
     during = []
+    before = []
     after = []
     unresolved = []
     for i in issues:
         resolved = i.get("resolved")
         if not resolved:
             unresolved.append(i)
-        elif resolved[:10] <= BUG_BASH_END:
+        elif BUG_BASH_START <= resolved[:10] <= BUG_BASH_END:
             during.append(i)
+        elif resolved[:10] < BUG_BASH_START:
+            before.append(i)
         else:
             after.append(i)
-    return during, after, unresolved
+    return during, before, after, unresolved
 
 
 def _outcome_counts(issue_list):
@@ -400,7 +469,7 @@ def _outcome_counts(issue_list):
 
 def chart_temporal_comparison(issues):
     """Side-by-side bar chart: bug bash week vs today."""
-    during, after, unresolved = _split_by_period(issues)
+    during, _before, after, unresolved = _split_by_period(issues)
     all_with_outcomes = during + after + unresolved
 
     bash_oc = _outcome_counts(during)
@@ -416,19 +485,15 @@ def chart_temporal_comparison(issues):
 
     axes[0].bar(categories, bash_vals, color=colors_bash, width=0.6)
     axes[0].bar_label(axes[0].containers[0], fontsize=12, fontweight="bold", padding=3)
-    bash_success = bash_oc["automated"] + bash_oc["accelerated"]
-    bash_fail = bash_oc["could_not_fix"] + bash_oc["verification_failed"]
-    bash_total = bash_success + bash_fail
-    bash_rate = bash_success / bash_total * 100 if bash_total else 0
-    axes[0].set_title(f"Bug Bash Week (Mar 23–27)\n{bash_total} outcomes, {bash_rate:.0f}% success", fontsize=12, fontweight="bold")
+    bash_fixable = bash_oc.get("fixable", 0) or (bash_oc["automated"] + bash_oc["accelerated"] + bash_oc["could_not_fix"] + bash_oc["verification_failed"])
+    bash_auto_rate = bash_oc["automated"] / bash_fixable * 100 if bash_fixable else 0
+    axes[0].set_title(f"Bug Bash Week (Mar 22\u201329)\n{bash_oc['automated']}/{bash_fixable} fixable automated ({bash_auto_rate:.0f}%)", fontsize=12, fontweight="bold")
 
     axes[1].bar(categories, today_vals, color=colors_today, width=0.6)
     axes[1].bar_label(axes[1].containers[0], fontsize=12, fontweight="bold", padding=3)
-    today_success = today_oc["automated"] + today_oc["accelerated"]
-    today_fail = today_oc["could_not_fix"] + today_oc["verification_failed"]
-    today_total = today_success + today_fail
-    today_rate = today_success / today_total * 100 if today_total else 0
-    axes[1].set_title(f"Current State (Today)\n{today_total} outcomes, {today_rate:.0f}% success", fontsize=12, fontweight="bold")
+    today_fixable = today_oc.get("fixable", 0) or (today_oc["automated"] + today_oc["accelerated"] + today_oc["could_not_fix"] + today_oc["verification_failed"])
+    today_auto_rate = today_oc["automated"] / today_fixable * 100 if today_fixable else 0
+    axes[1].set_title(f"Current State (Today)\n{today_oc['automated']}/{today_fixable} fixable automated ({today_auto_rate:.0f}%)", fontsize=12, fontweight="bold")
 
     fig.suptitle("Outcomes: Bug Bash Week vs Current State", fontsize=14, fontweight="bold", y=1.02)
     fig.tight_layout()
@@ -437,7 +502,7 @@ def chart_temporal_comparison(issues):
 
 def chart_resolution_waterfall(issues):
     """Stacked bar showing how issues moved through the pipeline over time."""
-    during, after, unresolved = _split_by_period(issues)
+    during, before, after, unresolved = _split_by_period(issues)
 
     # For unresolved: count those with outcome labels vs those still pending
     unresolved_with_outcome = [i for i in unresolved if any(
@@ -447,10 +512,10 @@ def chart_resolution_waterfall(issues):
     unresolved_fixable_pending = [i for i in unresolved_pending if "ai-fixable" in _labels(i)]
     unresolved_nonfixable = [i for i in unresolved_pending if "ai-nonfixable" in _labels(i)]
 
-    fig, ax = plt.subplots(figsize=(10, 5))
+    fig, ax = plt.subplots(figsize=(10, 5.5))
     categories = [
-        f"Resolved during\nbug bash\n(Mar 23–27)",
-        f"Resolved after\nbug bash\n(Mar 28–30)",
+        f"Resolved during\nbug bash\n(Mar 22–29)",
+        f"Resolved after\nbug bash\n(Mar 30+)",
         f"Open: outcome\nlabelled\n(not moved to Done)",
         f"Open: fixable\n(awaiting attempt)",
         f"Open: nonfixable",
@@ -465,16 +530,17 @@ def chart_resolution_waterfall(issues):
     colors = ["#2ecc71", "#3498db", "#f39c12", "#e67e22", "#e74c3c"]
     bars = ax.barh(categories, values, color=colors, height=0.55)
     ax.bar_label(bars, padding=5, fontsize=12, fontweight="bold")
-    ax.set_xlim(0, max(values) * 1.2)
-    ax.set_title("Issue Pipeline: Where Are the 366 Issues Today?", fontsize=13, fontweight="bold", pad=10)
+    ax.set_xlim(0, max(values) * 1.2 if max(values) > 0 else 1)
+    total = len(issues)
+    ax.set_title(f"Resolution Waterfall ({total} issues)", fontsize=13, fontweight="bold", pad=10)
     ax.invert_yaxis()
     return _fig_to_base64(fig)
 
 
 def chart_bash_week_daily(issues):
     """Daily breakdown during the bug bash week only."""
-    bash_days = ["2026-03-23", "2026-03-24", "2026-03-25", "2026-03-26", "2026-03-27"]
-    day_labels = ["Mon 23", "Tue 24", "Wed 25\n(no-meeting)", "Thu 26", "Fri 27"]
+    bash_days = ["2026-03-22", "2026-03-23", "2026-03-24", "2026-03-25", "2026-03-26", "2026-03-27", "2026-03-28", "2026-03-29"]
+    day_labels = ["Sun 22", "Mon 23", "Tue 24", "Wed 25", "Thu 26", "Fri 27", "Sat 28", "Sun 29"]
 
     daily_outcomes = {d: Counter() for d in bash_days}
     for i in issues:
@@ -545,6 +611,235 @@ def chart_time_to_fix_by_outcome(issues):
     return _fig_to_base64(fig)
 
 
+def _project_of(issue: dict) -> str:
+    key = issue.get("key", "")
+    return key.rsplit("-", 1)[0] if "-" in key else "Unknown"
+
+
+def chart_project_breakdown(issues, baseline_by_proj=None):
+    """Stacked horizontal bar: per-project counts by outcome category.
+
+    When baseline_by_proj is provided, a light background bar shows the full
+    backlog size for each project, with the stacked outcome bars overlaid.
+    The annotation distinguishes issues from the pre-existing backlog vs new
+    bugs filed during the bash.
+    """
+    by_proj: dict[str, Counter] = defaultdict(Counter)
+    new_by_proj: dict[str, int] = Counter()
+    for i in issues:
+        proj = _project_of(i)
+        labels = _labels(i)
+        created = (i.get("created") or "")[:10]
+        if created > BUG_BASH_START:
+            new_by_proj[proj] += 1
+        if "ai-nonfixable" in labels:
+            by_proj[proj]["Nonfixable"] += 1
+        elif "ai-fully-automated" in labels:
+            by_proj[proj]["Fully Automated"] += 1
+        elif "ai-accelerated-fix" in labels:
+            by_proj[proj]["Accelerated Fix"] += 1
+        elif "ai-could-not-fix" in labels:
+            by_proj[proj]["Could Not Fix"] += 1
+        elif "ai-verification-failed" in labels:
+            by_proj[proj]["Verification Failed"] += 1
+        elif "ai-fixable" in labels:
+            by_proj[proj]["Awaiting Outcome"] += 1
+        else:
+            by_proj[proj]["Untriaged"] += 1
+
+    if not by_proj:
+        return None
+
+    if baseline_by_proj is None:
+        baseline_by_proj = {}
+
+    projects = sorted(by_proj.keys(), key=lambda p: -sum(by_proj[p].values()))
+    categories = [
+        "Fully Automated", "Accelerated Fix", "Awaiting Outcome",
+        "Could Not Fix", "Verification Failed", "Nonfixable", "Untriaged",
+    ]
+    cat_colors = {
+        "Fully Automated": "#2ecc71", "Accelerated Fix": "#3498db",
+        "Awaiting Outcome": "#f1c40f", "Could Not Fix": "#e74c3c",
+        "Verification Failed": "#e67e22", "Nonfixable": "#c0392b",
+        "Untriaged": "#95a5a6",
+    }
+
+    fig, ax = plt.subplots(figsize=(10, max(3, len(projects) * 0.8)))
+    y_pos = list(range(len(projects)))
+
+    if baseline_by_proj:
+        baseline_vals = [baseline_by_proj.get(p, 0) for p in projects]
+        ax.barh(y_pos, baseline_vals, color="#dfe6e9", height=0.7,
+                label="Total Backlog (pre-bash)", edgecolor="#b2bec3", linewidth=0.8, zorder=1)
+
+    left = [0] * len(projects)
+    for cat in categories:
+        widths = [by_proj[p].get(cat, 0) for p in projects]
+        if not any(widths):
+            continue
+        ax.barh(y_pos, widths, left=left, color=cat_colors[cat], label=cat,
+                edgecolor="white", linewidth=0.5, height=0.55, zorder=2)
+        left = [l + w for l, w in zip(left, widths)]
+
+    for j, p in enumerate(projects):
+        triaged = sum(by_proj[p].values())
+        bl = baseline_by_proj.get(p)
+        new_count = new_by_proj.get(p, 0)
+        pre_bash = triaged - new_count
+        if bl:
+            parts = [f"{pre_bash} of {bl} backlog"]
+            if new_count:
+                parts.append(f"+{new_count} new")
+            ax.text(max(triaged, bl) + 2, j, " | ".join(parts),
+                    va="center", fontsize=8, color="#555", zorder=3)
+
+    ax.set_yticks(y_pos)
+    ax.set_yticklabels(projects)
+    ax.set_xlabel("Issues")
+    ax.set_title("Bug Bash Breakdown by Project", fontsize=13, fontweight="bold", pad=10)
+    ax.legend(loc="lower right", fontsize=8, framealpha=0.9)
+    ax.invert_yaxis()
+    return _fig_to_base64(fig)
+
+
+def chart_project_automation_rate(issues):
+    """Horizontal bar per project: automated / fixable = automation rate."""
+    by_proj: dict[str, Counter] = defaultdict(Counter)
+    for i in issues:
+        by_proj[_project_of(i)][_classify_issue(i)] += 1
+
+    if not by_proj:
+        return None
+
+    projects = sorted(by_proj.keys(), key=lambda p: -sum(by_proj[p].values()))
+    fixable_counts = []
+    automated_counts = []
+    rates = []
+    for p in projects:
+        pc = by_proj[p]
+        n_auto = pc["automated"]
+        n_fixable = n_auto + pc["accelerated"] + pc["could_not_fix"] + pc["verif_failed"] + pc["fixable_pending"]
+        fixable_counts.append(n_fixable)
+        automated_counts.append(n_auto)
+        rates.append(round(n_auto / n_fixable * 100, 1) if n_fixable else 0)
+
+    fig, ax = plt.subplots(figsize=(10, max(3, len(projects) * 1.0)))
+    y_pos = range(len(projects))
+    bar_colors = ["#2ecc71" if r >= 10 else "#f39c12" if r >= 5 else "#e74c3c" for r in rates]
+    bars = ax.barh(y_pos, rates, color=bar_colors, height=0.55, edgecolor="white", linewidth=0.5)
+
+    ax.set_yticks(y_pos)
+    ax.set_yticklabels(projects, fontsize=11)
+    ax.set_xlabel("Automation Rate (fully automated / fixable) %")
+    ax.set_xlim(0, max(rates) * 1.5 + 5 if rates else 10)
+    ax.invert_yaxis()
+
+    for j, (p, r) in enumerate(zip(projects, rates)):
+        label = f" {r:.1f}%  ({automated_counts[j]}/{fixable_counts[j]} fixable)"
+        ax.text(r + 0.3, j, label, va="center", fontsize=9, fontweight="bold")
+
+    ax.set_title("Automation Rate by Project (fully automated / fixable)", fontsize=13, fontweight="bold", pad=10)
+    return _fig_to_base64(fig)
+
+
+def chart_project_dashboard(proj_issues: list[dict], project_name: str,
+                            baseline_count: int | None = None) -> str | None:
+    """Three-panel mini dashboard for a single project's issues."""
+    if not proj_issues:
+        return None
+
+    pc = Counter(_classify_issue(i) for i in proj_issues)
+    total = len(proj_issues)
+    new_count = sum(1 for i in proj_issues
+                    if (i.get("created") or "")[:10] > BUG_BASH_START)
+    from_backlog = total - new_count
+    p_auto = pc["automated"]
+    p_accel = pc["accelerated"]
+    p_cnf = pc["could_not_fix"]
+    p_vf = pc["verif_failed"]
+    p_fixable_pending = pc["fixable_pending"]
+    p_nonfixable = pc["nonfixable"]
+    p_triaged_only = pc["triaged_only"]
+    p_untriaged = pc["untriaged"]
+    p_fixable = p_auto + p_accel + p_cnf + p_vf + p_fixable_pending
+    p_triaged = p_fixable + p_nonfixable + p_triaged_only
+    auto_rate = p_auto / p_fixable * 100 if p_fixable > 0 else 0
+
+    fig, axes = plt.subplots(1, 3, figsize=(16, 4.5))
+    fig.suptitle(project_name, fontsize=15, fontweight="bold", y=1.02)
+
+    # Panel 1: Triage funnel
+    ax = axes[0]
+    bars = []
+    values = []
+    colors = []
+    if baseline_count is not None:
+        bars.append("Bug Backlog")
+        values.append(baseline_count)
+        colors.append("#1a252f")
+
+    ai_label = f"AI Labelled\n({from_backlog} backlog"
+    if new_count:
+        ai_label += f" + {new_count} new"
+    ai_label += ")"
+    bars.append(ai_label)
+    values.append(total)
+    colors.append("#8e44ad")
+
+    bars += ["Fixable", "Nonfixable"]
+    values += [p_fixable, p_nonfixable]
+    colors += ["#2ecc71", "#e74c3c"]
+    b = ax.barh(bars, values, color=colors, height=0.6)
+    ax.bar_label(b, padding=4, fontsize=10, fontweight="bold")
+    ax.set_xlim(0, max(values) * 1.2 if max(values) > 0 else 1)
+    ax.set_title("Triage Funnel", fontsize=12, fontweight="bold")
+    ax.invert_yaxis()
+
+    # Panel 2: Outcome pie
+    ax = axes[1]
+    outcome_data = [
+        ("Fully Automated", p_auto, "#2ecc71"),
+        ("Accelerated Fix", p_accel, "#3498db"),
+        ("Could Not Fix", p_cnf, "#e74c3c"),
+        ("Verif Failed", p_vf, "#e67e22"),
+        ("Pending", p_fixable_pending, "#95a5a6"),
+    ]
+    pie_labels = [d[0] for d in outcome_data if d[1] > 0]
+    pie_values = [d[1] for d in outcome_data if d[1] > 0]
+    pie_colors = [d[2] for d in outcome_data if d[1] > 0]
+
+    if pie_values:
+        wedges, texts, autotexts = ax.pie(
+            pie_values, labels=pie_labels, colors=pie_colors,
+            autopct="%1.0f%%", startangle=90, textprops={"fontsize": 9},
+        )
+        for at in autotexts:
+            at.set_fontweight("bold")
+    else:
+        ax.text(0.5, 0.5, "No fixable issues", ha="center", va="center",
+                fontsize=11, color="#7f8c8d", transform=ax.transAxes)
+    ax.set_title(f"Fixable Breakdown ({p_fixable})", fontsize=12, fontweight="bold")
+
+    # Panel 3: Automation rate
+    ax = axes[2]
+    if p_fixable > 0:
+        ax.barh(["Automated", "Not Automated"], [p_auto, p_fixable - p_auto],
+                color=["#2ecc71", "#bdc3c7"], height=0.5)
+        ax.bar_label(ax.containers[0], padding=5, fontsize=11, fontweight="bold")
+        ax.set_xlim(0, p_fixable * 1.3)
+        ax.set_title(f"Automation Rate: {auto_rate:.1f}%\n({p_auto}/{p_fixable} fixable)",
+                     fontsize=12, fontweight="bold")
+    else:
+        ax.text(0.5, 0.5, "No fixable issues", ha="center", va="center",
+                fontsize=11, color="#7f8c8d", transform=ax.transAxes)
+        ax.set_title("Automation Rate", fontsize=12, fontweight="bold")
+        ax.set_xlim(0, 1)
+
+    fig.tight_layout()
+    return _fig_to_base64(fig)
+
+
 # ---------------------------------------------------------------------------
 # Deep text analysis
 # ---------------------------------------------------------------------------
@@ -612,26 +907,162 @@ def extract_sample_issues(issues, n=5):
 
 
 # ---------------------------------------------------------------------------
+# AI Bug Automation Readiness Charts
+# ---------------------------------------------------------------------------
+
+# Key checks from ai-bug-automation-readiness (most impactful for bug-fixing outcomes)
+HIGHLIGHT_ATTRIBUTES = [
+    "test_ratio", "one_command_test", "ci_pr_tests", "coverage_config",
+    "test_isolation", "ai_context_files", "bug_report_template",
+    "code_navigability", "build_setup", "type_safety",
+    "contributing_guide", "lint_in_ci",
+]
+
+
+def _repo_name(url: str) -> str:
+    """Extract 'org/repo' from a GitHub URL."""
+    parts = url.rstrip("/").split("/")
+    if len(parts) >= 2:
+        return f"{parts[-2]}/{parts[-1]}"
+    return url
+
+
+def chart_agentready_vs_outcomes(ar_data: list[dict], bug_bash_by_proj: dict) -> str | None:
+    """Horizontal bar: readiness score per repository, coloured by project."""
+    if not ar_data:
+        return None
+
+    seen: dict[str, dict] = {}
+    for row in ar_data:
+        repo = _repo_name(row["repo_url"])
+        if repo not in seen or row["overall_score"] > seen[repo]["score"]:
+            seen[repo] = {"score": row["overall_score"], "project": row["project"],
+                          "level": row["certification_level"]}
+
+    repos = sorted(seen.keys(), key=lambda r: -seen[r]["score"])
+    scores = [seen[r]["score"] for r in repos]
+    projects = [seen[r]["project"] for r in repos]
+    levels = [seen[r]["level"] for r in repos]
+
+    proj_colors = {}
+    palette = ["#2980b9", "#e74c3c", "#2ecc71", "#e67e22", "#8e44ad", "#1abc9c"]
+    for i, p in enumerate(sorted(set(projects))):
+        proj_colors[p] = palette[i % len(palette)]
+    bar_colors = [proj_colors[p] for p in projects]
+
+    fig, ax = plt.subplots(figsize=(10, max(4, len(repos) * 0.55)))
+    y_pos = range(len(repos))
+    bars = ax.barh(y_pos, scores, color=bar_colors, height=0.6, edgecolor="white", linewidth=0.5)
+
+    for j, (repo, score, proj, level) in enumerate(zip(repos, scores, projects, levels)):
+        ax.text(score + 0.8, j, f" {score:.0f} ({level}) [{proj}]",
+                va="center", fontsize=8, fontweight="bold")
+
+    ax.set_yticks(list(y_pos))
+    ax.set_yticklabels(repos, fontsize=9)
+    ax.set_xlim(0, 110)
+    ax.set_xlabel("Readiness Score (0-100)")
+    ax.invert_yaxis()
+
+    for proj, color in proj_colors.items():
+        ax.barh([], [], color=color, label=proj)
+    ax.legend(loc="lower right", fontsize=8, framealpha=0.9, title="JIRA Project")
+
+    ax.set_title("Bug Automation Readiness Score by Repository", fontsize=13, fontweight="bold", pad=10)
+    return _fig_to_base64(fig)
+
+
+def chart_agentready_attributes(ar_data: list[dict]) -> str | None:
+    """Horizontal bar chart: key attribute scores across projects."""
+    if not ar_data:
+        return None
+
+    proj_scores: dict[str, dict[str, float | None]] = {}
+    for row in ar_data:
+        findings = json.loads(row.get("findings_json") or "[]")
+        attr_map = {}
+        for f in findings:
+            attr_id = f.get("attribute", {}).get("id", "")
+            attr_map[attr_id] = f.get("score")
+        proj_scores[row["project"]] = attr_map
+
+    attrs_to_show = [a for a in HIGHLIGHT_ATTRIBUTES
+                     if any(ps.get(a) is not None for ps in proj_scores.values())]
+    if not attrs_to_show:
+        return None
+
+    proj_colors = {"RHOAIENG": "#e74c3c", "AIPCC": "#e67e22", "RHAIENG": "#9b59b6", "INFERENG": "#3498db"}
+    projects = sorted(proj_scores.keys())
+
+    fig, ax = plt.subplots(figsize=(10, max(4, len(attrs_to_show) * 0.6)))
+    y = range(len(attrs_to_show))
+    bar_h = 0.8 / max(len(projects), 1)
+
+    for pi, proj in enumerate(projects):
+        vals = [proj_scores[proj].get(a) or 0 for a in attrs_to_show]
+        positions = [yi + pi * bar_h - (len(projects) - 1) * bar_h / 2 for yi in y]
+        ax.barh(positions, vals, height=bar_h, color=proj_colors.get(proj, "#95a5a6"),
+                label=proj, alpha=0.85)
+
+    labels = [a.replace("_", " ").title() for a in attrs_to_show]
+    ax.set_yticks(list(y))
+    ax.set_yticklabels(labels, fontsize=9)
+    ax.set_xlim(0, 105)
+    ax.set_xlabel("Attribute Score (0-100)")
+    ax.legend(fontsize=9, loc="lower right")
+    ax.set_title("Bug Automation Readiness — Key Checks by Project", fontsize=13, fontweight="bold", pad=10)
+    return _fig_to_base64(fig)
+
+
+# ---------------------------------------------------------------------------
 # HTML Report
 # ---------------------------------------------------------------------------
 
-def generate_html(issues, charts, analysis):
-    labels_all = [lbl for i in issues for lbl in _labels(i)]
-    lc = Counter(labels_all)
-    triaged = lc.get("ai-triaged", 0)
-    fixable = lc.get("ai-fixable", 0)
-    nonfixable = lc.get("ai-nonfixable", 0)
-    automated = lc.get("ai-fully-automated", 0)
-    accelerated = lc.get("ai-accelerated-fix", 0)
-    could_not = lc.get("ai-could-not-fix", 0)
-    verif_fail = lc.get("ai-verification-failed", 0)
-    regressions = lc.get("regressions-found", 0)
-    successes = automated + accelerated
-    failures = could_not + verif_fail
-    outcomes = successes + failures
-    success_rate = successes / outcomes * 100 if outcomes > 0 else 0
+def _classify_issue(issue: dict) -> str:
+    """Classify a single issue into one outcome bucket (unique-issue counting).
+
+    Priority order: success labels beat failure labels for issues with both,
+    since the latest state is what matters.
+    """
+    lbls = set(_labels(issue))
+    if "ai-fully-automated" in lbls:
+        return "automated"
+    if "ai-accelerated-fix" in lbls:
+        return "accelerated"
+    if "ai-could-not-fix" in lbls:
+        return "could_not_fix"
+    if "ai-verification-failed" in lbls:
+        return "verif_failed"
+    if "ai-nonfixable" in lbls:
+        return "nonfixable"
+    if "ai-fixable" in lbls:
+        return "fixable_pending"
+    if "ai-triaged" in lbls:
+        return "triaged_only"
+    return "untriaged"
+
+
+def generate_html(issues, charts, analysis, non_bugs=0, baseline_total=None, baseline_by_proj=None):
+    # Count unique issues per classification (no double-counting)
+    cls_counts = Counter(_classify_issue(i) for i in issues)
+    automated = cls_counts["automated"]
+    accelerated = cls_counts["accelerated"]
+    could_not = cls_counts["could_not_fix"]
+    verif_fail = cls_counts["verif_failed"]
+    regressions = sum(1 for i in issues if "regressions-found" in _labels(i))
+    nonfixable = cls_counts["nonfixable"]
+    fixable = cls_counts["fixable_pending"] + automated + accelerated + could_not + verif_fail
+    pending_classification = cls_counts["triaged_only"]
+    triaged = fixable + nonfixable + pending_classification
+    automation_rate = automated / fixable * 100 if fixable > 0 else 0
     resolved = sum(1 for i in issues if i.get("resolved"))
     open_count = len(issues) - resolved
+
+    # Edge case counts for tooltips
+    raw_nf_label = sum(1 for i in issues if "ai-nonfixable" in _labels(i))
+    raw_triaged_label = sum(1 for i in issues if "ai-triaged" in _labels(i))
+    missing_triaged = len(issues) - raw_triaged_label
+    conflicting_nf = raw_nf_label - nonfixable
 
     gap = analysis["acceleration_gap"]
     theme_data = analysis["nonfixable_themes"]
@@ -666,9 +1097,30 @@ def generate_html(issues, charts, analysis):
         <table><thead><tr><th>Key</th><th>Summary</th><th>Component</th><th>Priority</th><th>Description</th></tr></thead>
         <tbody>{rows}</tbody></table>"""
 
+    # Baseline: use JQL-sourced total if available, otherwise fall back to label-based count
+    has_baseline = baseline_total is not None
+    total_display = baseline_total if has_baseline else len(issues)
+    triage_pct = len(issues) / total_display * 100 if total_display else 0
+    if baseline_by_proj is None:
+        baseline_by_proj = {}
+
+    # Per-project coverage gap analysis
+    proj_counts: dict[str, int] = Counter(_project_of(i) for i in issues)
+    new_by_proj: dict[str, int] = Counter(
+        _project_of(i) for i in issues
+        if (i.get("created") or "")[:10] > BUG_BASH_START)
+    coverage_rows = []
+    for proj in sorted(baseline_by_proj, key=lambda p: -(baseline_by_proj[p] - (proj_counts.get(p, 0) - new_by_proj.get(p, 0)))):
+        bl = baseline_by_proj[proj]
+        from_bl = proj_counts.get(proj, 0) - new_by_proj.get(proj, 0)
+        not_reached = bl - from_bl
+        cov = from_bl / bl * 100 if bl else 0
+        if not_reached > 0:
+            coverage_rows.append(f"<strong>{proj}</strong>: {not_reached} not reached ({cov:.0f}% covered)")
+
     html = f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8">
-<title>AI Bug Bash Deep Analysis — March 23–27, 2026</title>
+<title>AI First Bug Bash Deep Analysis — March 22–29, 2026</title>
 <style>
     body {{ font-family: 'Segoe UI', -apple-system, sans-serif; max-width: 1000px; margin: 0 auto; padding: 20px 40px; color: #2c3e50; line-height: 1.6; }}
     h1 {{ color: #1a252f; border-bottom: 3px solid #2980b9; padding-bottom: 10px; }}
@@ -676,10 +1128,11 @@ def generate_html(issues, charts, analysis):
     h3 {{ color: #34495e; margin-top: 25px; }}
     h4 {{ color: #7f8c8d; }}
     .stat-grid {{ display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; margin: 20px 0; }}
-    .stat-box {{ background: #f8f9fa; border-left: 4px solid #2980b9; padding: 15px; border-radius: 4px; }}
+    .stat-box {{ background: #f8f9fa; border-left: 4px solid #2980b9; padding: 15px; border-radius: 4px; cursor: help; }}
     .stat-box.green {{ border-color: #2ecc71; }}
     .stat-box.red {{ border-color: #e74c3c; }}
     .stat-box.orange {{ border-color: #e67e22; }}
+    .stat-box.purple {{ border-color: #8e44ad; }}
     .stat-box .number {{ font-size: 28px; font-weight: bold; color: #2c3e50; }}
     .stat-box .label {{ font-size: 12px; color: #7f8c8d; text-transform: uppercase; }}
     table {{ border-collapse: collapse; width: 100%; margin: 15px 0; font-size: 0.9em; }}
@@ -687,8 +1140,13 @@ def generate_html(issues, charts, analysis):
     th {{ background: #f1f3f5; font-weight: 600; }}
     tr:nth-child(even) {{ background: #f8f9fa; }}
     .recommendation {{ background: #fff3cd; border-left: 4px solid #ffc107; padding: 12px 16px; margin: 10px 0; border-radius: 4px; }}
-    .recommendation.action {{ background: #d4edda; border-color: #28a745; }}
-    .recommendation.critical {{ background: #f8d7da; border-color: #dc3545; }}
+    .recommendation.rec-critical {{ background: #f8d7da; border-left: 4px solid #dc3545; }}
+    .recommendation.rec-medium {{ background: #fff3cd; border-left: 4px solid #ffc107; }}
+    .recommendation.rec-low {{ background: #d4edda; border-left: 4px solid #28a745; }}
+    .severity-badge {{ display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 0.75em; font-weight: bold; text-transform: uppercase; letter-spacing: 0.5px; margin-left: 8px; vertical-align: middle; }}
+    .severity-badge.critical {{ background: #dc3545; color: white; }}
+    .severity-badge.medium {{ background: #ffc107; color: #333; }}
+    .severity-badge.low {{ background: #28a745; color: white; }}
     .insight {{ background: #e8f4fd; border-left: 4px solid #2980b9; padding: 12px 16px; margin: 10px 0; border-radius: 4px; }}
     .finding {{ background: #f0f0f0; padding: 12px 16px; margin: 8px 0; border-radius: 4px; }}
     blockquote {{ border-left: 3px solid #bdc3c7; padding-left: 15px; color: #555; font-style: italic; }}
@@ -700,9 +1158,9 @@ def generate_html(issues, charts, analysis):
 </style>
 </head><body>
 
-<h1>AI Bug Bash — Deep Analysis Report</h1>
+<h1>AI First Bug Bash — Deep Analysis Report</h1>
 <p style="color:#7f8c8d;font-size:0.95em;">
-    RHOAI Engineering &bull; March 23–27, 2026 &bull; Generated {datetime.now().strftime("%B %d, %Y %H:%M")}
+    RH AI Engineering &bull; March 22–29, 2026 &bull; Generated {datetime.now().strftime("%B %d, %Y %H:%M")}
 </p>
 
 <div class="toc">
@@ -710,11 +1168,13 @@ def generate_html(issues, charts, analysis):
 <ol>
 <li><a href="#exec-summary">Executive Summary</a></li>
 <li><a href="#pipeline">Triage Pipeline & Outcomes</a></li>
+<li><a href="#by-project">Breakdown by Project</a></li>
 <li><a href="#temporal-split">Bug Bash Week vs Current State</a></li>
 <li><a href="#nonfixable">Critical Question: Why Are Tickets Nonfixable?</a></li>
 <li><a href="#acceleration">Critical Question: Converting Accelerated-Fix to Fully Automated</a></li>
-<li><a href="#temporal">Temporal Analysis</a></li>
+<li><a href="#agentready">Bug Automation Readiness vs Bug Bash Outcomes</a></li>
 <li><a href="#recommendations">Recommendations: Improving Prompts & Process</a></li>
+<li><a href="#appendix">Appendix: Methodology</a></li>
 </ol>
 </div>
 
@@ -722,28 +1182,37 @@ def generate_html(issues, charts, analysis):
 <h2 id="exec-summary">1. Executive Summary</h2>
 
 <div class="stat-grid">
-    <div class="stat-box"><div class="number">{len(issues)}</div><div class="label">Total Issues</div></div>
-    <div class="stat-box green"><div class="number">{success_rate:.0f}%</div><div class="label">AI Success Rate</div></div>
-    <div class="stat-box red"><div class="number">{nonfixable}</div><div class="label">Nonfixable</div></div>
-    <div class="stat-box orange"><div class="number">{open_count}</div><div class="label">Still Open</div></div>
+    <div class="stat-box" title="{'All bugs in New/Backlog/Refinement/To Do as of March 22 across RHOAIENG, AIPCC, RHAIENG, INFERENG (from baseline JQL query). This is the full backlog population.' if has_baseline else 'Bugs with ai-* labels only (' + str(non_bugs) + ' non-Bug issues excluded). Run make collect to fetch the full baseline count from JIRA.'}"><div class="number">{total_display}</div><div class="label">Total Issues (Backlog)</div></div>
+    <div class="stat-box purple" title="Issues with ai-* labels in our collection ({len(issues)} of {total_display} total). {raw_triaged_label} have ai-triaged; {missing_triaged} have other ai-* labels but are missing ai-triaged."><div class="number">{len(issues)}</div><div class="label">Triaged by AI ({triage_pct:.0f}%)</div></div>
+    <div class="stat-box" title="automated ({automated}) + accelerated ({accelerated}) + could-not-fix ({could_not}) + verif-failed ({verif_fail}) + fixable-pending ({cls_counts['fixable_pending']}). Includes all issues deemed fixable at triage, regardless of outcome."><div class="number">{fixable}</div><div class="label">Fixable</div></div>
+    <div class="stat-box red" title="JIRA label filter shows {raw_nf_label}, but {conflicting_nf} issue(s) also have a higher-priority outcome label and are counted there instead. See Appendix for classification rules."><div class="number">{nonfixable}</div><div class="label">Nonfixable</div></div>
 </div>
 
 <div class="stat-grid">
-    <div class="stat-box green"><div class="number">{automated}</div><div class="label">Fully Automated</div></div>
-    <div class="stat-box"><div class="number">{accelerated}</div><div class="label">Accelerated Fix</div></div>
-    <div class="stat-box red"><div class="number">{could_not}</div><div class="label">Could Not Fix</div></div>
-    <div class="stat-box orange"><div class="number">{verif_fail}</div><div class="label">Verification Failed</div></div>
+    <div class="stat-box green" title="Issues with ai-fully-automated label. AI fixed the issue end-to-end with no human intervention."><div class="number">{automated}</div><div class="label">Fully Automated</div></div>
+    <div class="stat-box" title="Issues with ai-accelerated-fix label. AI contributed but a human was needed to finish the fix."><div class="number">{accelerated}</div><div class="label">Accelerated Fix</div></div>
+    <div class="stat-box red" title="Issues with ai-could-not-fix ({could_not}) or ai-verification-failed ({verif_fail}). Deemed fixable at triage but AI failed to produce a working fix."><div class="number">{could_not + verif_fail}</div><div class="label">Could Not Fix / Verif Failed</div></div>
+    <div class="stat-box green" title="fully-automated ({automated}) / fixable ({fixable}) = {automation_rate:.1f}%. Measures what % of fixable issues AI solved without any human help."><div class="number">{automation_rate:.1f}%</div><div class="label">Automation Rate<br>(automated / fixable)</div></div>
 </div>
 
-<p>Of {len(issues)} issues triaged during the AI Bug Bash, <strong>{fixable}</strong> ({fixable/len(issues)*100:.0f}%) were
-deemed fixable by AI and <strong>{nonfixable}</strong> ({nonfixable/len(issues)*100:.0f}%) were not. Of the {outcomes} issues
-that reached an outcome, AI achieved a <strong>{success_rate:.1f}% success rate</strong> — {automated} fully automated and
-{accelerated} accelerated fixes, against {could_not} failures and {verif_fail} verification failures.</p>
+<p>Of <strong>{total_display}</strong> bugs in the backlog when the bug bash started (March 22),
+<strong>{len(issues)}</strong> ({triage_pct:.0f}%) were triaged by AI with <code>ai-*</code> labels.
+Of those triaged issues, <strong>{fixable}</strong> ({fixable/len(issues)*100:.0f}%) were
+deemed fixable, <strong>{nonfixable}</strong> ({nonfixable/len(issues)*100:.0f}%) were deemed nonfixable,
+and <strong>{pending_classification}</strong> ({pending_classification/len(issues)*100:.0f}%) were triaged but not yet classified as fixable or nonfixable.
+Of those {fixable} fixable issues, <strong>{automated}</strong> ({automation_rate:.1f}%) were fully automated
+end-to-end without human intervention.
+Another <strong>{accelerated}</strong> ({accelerated/fixable*100:.1f}%) required human assist (accelerated fix), while <strong>{could_not}</strong> could not be fixed
+and <strong>{verif_fail}</strong> failed verification.</p>
 
 <div class="insight">
-<strong>Key Finding:</strong> The gap between accelerated-fix ({accelerated}) and fully-automated ({automated}) is the
-largest opportunity. {accelerated - automated} additional issues required human intervention after AI's first attempt.
-Understanding why converts future multi-attempt fixes into single-shot automation.
+<strong>Key Finding:</strong> The {automation_rate:.1f}% automation rate means {fixable - automated} of {fixable} fixable issues
+still required human involvement. The {accelerated} accelerated-fix issues are the clearest conversion opportunity \u2014
+these were fixable and AI contributed, but couldn\u2019t finish the job alone.
+{f"Additionally, {pending_classification} issues ({pending_classification/len(issues)*100:.0f}%) are still pending fixable/nonfixable classification." if pending_classification else ""}
+{f"""<br><strong>Coverage:</strong> AI triaged {triage_pct:.0f}% of the {total_display} bugs in the backlog &mdash;
+{total_display - len(issues)} bugs were not reached by AI triage.
+Per-project coverage: {", ".join(coverage_rows)}.""" if has_baseline and coverage_rows else (f"<br><strong>Coverage:</strong> AI triaged {triage_pct:.0f}% of the {total_display} bugs in the backlog &mdash; {total_display - len(issues)} bugs were not reached by AI triage." if has_baseline else "")}
 </div>
 
 <!-- ============================================================ -->
@@ -752,69 +1221,95 @@ Understanding why converts future multi-attempt fixes into single-shot automatio
 {img("triage_funnel")}
 {img("outcome_distribution")}
 {img("success_rate")}
-{img("priority_breakdown")}
 
 <h3>What the data tells us</h3>
 <ul>
-<li><strong>{fixable/len(issues)*100:.0f}% fixable rate</strong> — AI triage classified {fixable} of {triaged} triaged issues as fixable.
-This is a reasonable filter; the challenge is in the {nonfixable/triaged*100:.0f}% deemed nonfixable.</li>
-<li><strong>{outcomes} of {fixable} fixable reached an outcome</strong> ({outcomes/fixable*100:.0f}%) — {fixable - outcomes} fixable issues
-have not yet been attempted.</li>
+<li><strong>{fixable/len(issues)*100:.0f}% fixable rate</strong> \u2014 AI triage classified {fixable} of {triaged} triaged issues as fixable.
+The challenge is in the {nonfixable/triaged*100:.0f}% deemed nonfixable.</li>
+<li><strong>{automation_rate:.1f}% automation rate</strong> \u2014 only {automated} of {fixable} fixable issues were fully automated.
+{accelerated} more were accelerated (AI helped, human finished), and {could_not + verif_fail} failed.</li>
 <li><strong>Blocker and Critical priorities</strong> are disproportionately nonfixable — these tend to be environment-dependent
 or cross-service issues that AI lacks the context to address.</li>
 </ul>
 
 <!-- ============================================================ -->
-<h2 id="temporal-split" class="page-break">3. Bug Bash Week vs Current State</h2>
+<h2 id="by-project" class="page-break">3. Breakdown by Project</h2>
+
+{img("project_breakdown")}
+{img("project_success_rate")}
 """
-    # Compute temporal split stats
-    during, after_bash, unresolved_all = _split_by_period(issues)
-    bash_oc = _outcome_counts(during)
-    all_oc = _outcome_counts(issues)
-    bash_success = bash_oc["automated"] + bash_oc["accelerated"]
-    bash_fail = bash_oc["could_not_fix"] + bash_oc["verification_failed"]
-    bash_outcomes = bash_success + bash_fail
-    bash_rate = bash_success / bash_outcomes * 100 if bash_outcomes else 0
+    # Build per-project summary table using unique-issue classification
+    proj_cls: dict[str, Counter] = defaultdict(Counter)
+    for i in issues:
+        proj_cls[_project_of(i)][_classify_issue(i)] += 1
+
+    proj_rows = ""
+    for proj in sorted(proj_cls, key=lambda p: -sum(proj_cls[p].values())):
+        pc = proj_cls[proj]
+        total = sum(pc.values())
+        p_baseline = baseline_by_proj.get(proj)
+        p_baseline_cell = f"{p_baseline}" if p_baseline is not None else "&mdash;"
+        p_automated = pc["automated"]
+        p_accelerated = pc["accelerated"]
+        p_could_not = pc["could_not_fix"]
+        p_verif_fail = pc["verif_failed"]
+        p_fixable_pending = pc["fixable_pending"]
+        p_nonfixable = pc["nonfixable"]
+        p_triaged_only = pc["triaged_only"]
+        p_untriaged = pc["untriaged"]
+        p_fixable_all = p_automated + p_accelerated + p_could_not + p_verif_fail + p_fixable_pending
+        p_triaged_all = p_fixable_all + p_nonfixable + p_triaged_only
+        p_rate = round(p_automated / p_fixable_all * 100, 1) if p_fixable_all else 0
+        p_accel_rate = round(p_accelerated / p_fixable_all * 100, 1) if p_fixable_all else 0
+        p_coverage = f" ({total / p_baseline * 100:.0f}%)" if p_baseline else ""
+        pending_note = f' <span style="color:#e67e22">({p_triaged_only} pending)</span>' if p_triaged_only > 0 else ""
+        proj_rows += f"""<tr>
+            <td><strong>{proj}</strong></td>
+            <td>{p_baseline_cell}</td><td>{total}{p_coverage}</td><td>{p_triaged_all}{pending_note}</td>
+            <td>{p_fixable_all}</td><td>{p_nonfixable}</td>
+            <td>{p_automated}</td><td>{p_accelerated}</td>
+            <td>{p_could_not}</td><td>{p_verif_fail}</td>
+            <td><strong>{p_rate:.1f}%</strong> ({p_automated}/{p_fixable_all})</td>
+            <td>{p_accel_rate:.1f}% ({p_accelerated}/{p_fixable_all})</td>
+        </tr>"""
+
+    html += f"""
+<table>
+<thead><tr>
+    <th>Project</th><th>Backlog</th><th>AI Triaged</th><th>Classified</th><th>Fixable</th><th>Nonfixable</th>
+    <th>Automated</th><th>Accelerated</th><th>Could Not Fix</th><th>Verif Failed</th>
+    <th>Automation Rate</th>
+    <th>Accelerated Rate</th>
+</tr></thead>
+<tbody>{proj_rows}</tbody>
+</table>
+
+<h3>Totals — All Projects Combined</h3>
+{img("project_dashboard_totals")}
+"""
+
+    # Per-project dashboards
+    project_order = charts.get("_project_order", [])
+    for proj in project_order:
+        html += f"""
+<h3>{proj}</h3>
+{img(f"project_dashboard_{proj}")}
+"""
+
+    html += """
+<!-- ============================================================ -->
+<h2 id="temporal-split" class="page-break">4. Bug Bash Week vs Current State</h2>
+"""
+    # Compute temporal split stats (only need unresolved for "Remaining Work")
+    _during, _before, _after, unresolved_all = _split_by_period(issues)
     unresolved_with_outcome = sum(1 for i in unresolved_all if any(l in _labels(i) for l in OUTCOME_LABELS))
     fixable_awaiting = sum(1 for i in unresolved_all if "ai-fixable" in _labels(i) and not any(l in _labels(i) for l in OUTCOME_LABELS))
 
     html += f"""
-<p>The bug bash ran March 23–27, but work has continued after. This section separates results
+<p>The bug bash ran March 22\u201329, but work has continued after. This section separates results
 from the event week itself versus the current cumulative state.</p>
 
 {img("temporal_comparison")}
-
-<div class="stat-grid">
-    <div class="stat-box"><div class="number">{len(during)}</div><div class="label">Resolved during<br>bug bash week</div></div>
-    <div class="stat-box"><div class="number">{len(after_bash)}</div><div class="label">Resolved after<br>(Mar 28–30)</div></div>
-    <div class="stat-box orange"><div class="number">{unresolved_with_outcome}</div><div class="label">Open with outcome<br>(JIRA not moved)</div></div>
-    <div class="stat-box red"><div class="number">{fixable_awaiting}</div><div class="label">Fixable awaiting<br>AI attempt</div></div>
-</div>
-
-{img("resolution_waterfall")}
-
-<div class="insight">
-<strong>Data Quality Note:</strong> {unresolved_with_outcome} issues have AI outcome labels (accelerated-fix, could-not-fix, etc.)
-but are still marked as open in JIRA. These represent completed AI work where the JIRA status wasn't updated.
-The actual number of issues that have been worked is higher than the "resolved" count suggests.
-</div>
-
-<h3>Bug Bash Week: Daily Breakdown</h3>
-{img("bash_week_daily")}
-
-<h3>Bug Bash Week Performance</h3>
-<table>
-<thead><tr><th>Metric</th><th>Bug Bash Week<br>(Mar 23–27)</th><th>Current Total<br>(all time)</th></tr></thead>
-<tbody>
-<tr><td>Issues resolved</td><td><strong>{len(during)}</strong></td><td><strong>{len(during) + len(after_bash)}</strong></td></tr>
-<tr><td>AI fully automated</td><td>{bash_oc['automated']}</td><td>{all_oc['automated']}</td></tr>
-<tr><td>AI accelerated fix</td><td>{bash_oc['accelerated']}</td><td>{all_oc['accelerated']}</td></tr>
-<tr><td>AI could not fix</td><td>{bash_oc['could_not_fix']}</td><td>{all_oc['could_not_fix']}</td></tr>
-<tr><td>AI verification failed</td><td>{bash_oc['verification_failed']}</td><td>{all_oc['verification_failed']}</td></tr>
-<tr><td>Outcomes reached</td><td>{bash_outcomes}</td><td>{outcomes}</td></tr>
-<tr><td>AI success rate</td><td><strong>{bash_rate:.1f}%</strong></td><td><strong>{success_rate:.1f}%</strong></td></tr>
-</tbody>
-</table>
 
 <h3>Remaining Work</h3>
 <ul>
@@ -824,7 +1319,7 @@ The actual number of issues that have been worked is higher than the "resolved" 
 </ul>
 
 <!-- ============================================================ -->
-<h2 id="nonfixable" class="page-break">4. Critical Question: Why Are Tickets Nonfixable?</h2>
+<h2 id="nonfixable" class="page-break">5. Critical Question: Why Are Tickets Nonfixable?</h2>
 
 <p><strong>{nonfixable} issues</strong> were marked <code>ai-nonfixable</code> during triage. This section analyzes
 the structural reasons and identifies what would need to change to make them fixable.</p>
@@ -833,6 +1328,16 @@ the structural reasons and identifies what would need to change to make them fix
 {img("nonfixable_by_component")}
 {img("fixable_vs_nonfixable")}
 
+<h3>Per-Project Charts</h3>
+"""
+    for proj in charts.get("_project_order", []):
+        proj_nf_themes = img(f"nonfixable_themes_{proj}")
+        proj_nf_comp = img(f"nonfixable_by_component_{proj}")
+        proj_fvn = img(f"fixable_vs_nonfixable_{proj}")
+        if any(x for x in [proj_nf_themes, proj_nf_comp, proj_fvn]):
+            html += f'<h4>{proj}</h4>\n{proj_nf_themes}\n{proj_nf_comp}\n{proj_fvn}\n'
+
+    html += """
 <h3>Theme-by-Theme Breakdown</h3>
 """
 
@@ -886,10 +1391,43 @@ AI cannot determine the fix with confidence.</li>
 </ol>
 </div>
 
-{sample_table(nf_samples, "Sample Nonfixable Issues")}
+<h3>Per-Project Nonfixable Breakdown</h3>
+"""
+    # Per-project nonfixable analysis
+    nf_by_proj: dict[str, list] = defaultdict(list)
+    for i in analysis["all_nonfixable"]:
+        nf_by_proj[_project_of(i)].append(i)
 
+    html += """<table>
+<thead><tr><th>Project</th><th>Nonfixable</th><th>Top Themes</th><th>Nonfixable Rate</th></tr></thead>
+<tbody>"""
+
+    fix_by_proj: dict[str, int] = Counter(_project_of(i) for i in analysis["all_fixable"])
+    for proj in sorted(nf_by_proj, key=lambda p: -len(nf_by_proj[p])):
+        p_nf = len(nf_by_proj[proj])
+        p_fix = fix_by_proj.get(proj, 0)
+        p_total = p_nf + p_fix
+        p_rate = p_nf / p_total * 100 if p_total else 0
+
+        p_themes: Counter = Counter()
+        for i in nf_by_proj[proj]:
+            desc = (i.get("description") or i.get("summary") or "").lower()
+            if any(w in desc for w in ["ui", "frontend", "dashboard", "visual", "css", "layout"]):
+                p_themes["UI/frontend"] += 1
+            elif any(w in desc for w in ["cluster", "infra", "environment", "operator", "deploy", "node"]):
+                p_themes["Infrastructure"] += 1
+            elif any(w in desc for w in ["flak", "intermittent", "timing", "race", "timeout"]):
+                p_themes["Flaky/timing"] += 1
+            else:
+                p_themes["Other"] += 1
+        themes_str = ", ".join(f"{t} ({c})" for t, c in p_themes.most_common(3))
+        html += f"<tr><td><strong>{proj}</strong></td><td>{p_nf}</td><td>{themes_str}</td><td><strong>{p_rate:.0f}%</strong></td></tr>"
+
+    html += "</tbody></table>"
+
+    html += f"""
 <!-- ============================================================ -->
-<h2 id="acceleration" class="page-break">5. Critical Question: Converting Accelerated-Fix to Fully Automated</h2>
+<h2 id="acceleration" class="page-break">6. Critical Question: Converting Accelerated-Fix to Fully Automated</h2>
 
 <p><strong>{accelerated}</strong> issues required multiple AI attempts before a viable fix was produced, while only
 <strong>{automated}</strong> were fixed in a single shot. This section analyzes what separates the two groups.</p>
@@ -935,65 +1473,119 @@ indicating AI lacks sufficient context or the code structure is harder to reason
             html += f"<tr><td>{comp}</td><td>{au}</td><td>{ac}</td><td><strong>{rate:.0f}%</strong></td></tr>"
     html += "</tbody></table>"
 
+    # Per-project acceleration breakdown
+    accel_by_proj: dict[str, int] = Counter(_project_of(i) for i in analysis["all_accelerated"])
+    auto_by_proj: dict[str, int] = Counter(_project_of(i) for i in analysis["all_automated"])
+    all_accel_projs = sorted(set(accel_by_proj) | set(auto_by_proj), key=lambda p: -(accel_by_proj.get(p, 0) + auto_by_proj.get(p, 0)))
+
+    html += """
+<h3>Per-Project Automation vs Acceleration</h3>
+<table>
+<thead><tr><th>Project</th><th>Fully Automated</th><th>Accelerated</th><th>Automation Rate</th><th>Conversion Opportunity</th></tr></thead>
+<tbody>"""
+    for proj in all_accel_projs:
+        p_au = auto_by_proj.get(proj, 0)
+        p_ac = accel_by_proj.get(proj, 0)
+        p_total = p_au + p_ac
+        p_auto_rate = p_au / p_total * 100 if p_total else 0
+        html += f"<tr><td><strong>{proj}</strong></td><td>{p_au}</td><td>{p_ac}</td><td><strong>{p_auto_rate:.0f}%</strong></td><td>{p_ac} issues to convert</td></tr>"
+    html += "</tbody></table>"
+
     html += f"""
-{sample_table(acc_samples, "Sample Accelerated-Fix Issues (required multiple attempts)")}
-{sample_table(auto_samples, "Sample Fully-Automated Issues (single-shot success)")}
-
 <div class="insight">
-<strong>Key Finding:</strong> The gap between accelerated and automated is primarily about <em>context quality</em>,
-not issue complexity. Accelerated issues average {gap['accelerated']['avg_desc_len']:.0f} chars of description vs
-{gap['automated']['avg_desc_len']:.0f} for automated. The components with 100% multi-attempt rates
-(Notebooks Extensions, AutoML, AI Evaluations) likely lack sufficient repo context or architectural documentation
-in the AI's knowledge base.
+<strong>Key Finding:</strong> {"Accelerated issues average <em>longer</em> descriptions (" + f"{gap['accelerated']['avg_desc_len']:.0f} chars vs {gap['automated']['avg_desc_len']:.0f}" + " for automated), so the barrier is not lack of ticket detail. Instead, the gap is likely <em>codebase context</em> — components with high multi-attempt rates may lack sufficient architectural documentation, test patterns, or repo-level context for AI to produce a correct fix on the first try." if gap['accelerated']['avg_desc_len'] > gap['automated']['avg_desc_len'] else "Automated issues average richer descriptions (" + f"{gap['automated']['avg_desc_len']:.0f} chars vs {gap['accelerated']['avg_desc_len']:.0f}" + " for accelerated), suggesting that better ticket detail directly improves single-shot automation."} The {accelerated} accelerated-fix issues are the primary conversion opportunity.
 </div>
 
 <!-- ============================================================ -->
-<h2 id="temporal" class="page-break">6. Temporal Analysis</h2>
+"""
 
-{img("daily_throughput")}
-{img("time_to_fix")}
+    # Section 7: AI Bug Automation Readiness (conditional)
+    ar_data = analysis.get("agentready", [])
+    if ar_data:
+        bb_by_proj = analysis.get("agentready_bb_by_proj", {})
+        html += """
+<h2 id="agentready" class="page-break">7. Bug Automation Readiness vs Bug Bash Outcomes</h2>
 
-<h3>Observations</h3>
-<ul>
-<li>Resolution throughput peaked mid-week (Wednesday–Thursday), aligning with the "no-meeting" deep work day.</li>
-<li>The fully-automated outcomes have a significantly shorter time-to-fix, as expected — these are the
-issues where AI could produce a correct fix without iteration.</li>
-<li>Accelerated fixes have a wide variance in time-to-fix, suggesting the human-in-the-loop iteration
-time varies greatly by component complexity.</li>
-</ul>
+<p>This section correlates <a href="https://github.com/ugiordan/ai-bug-automation-readiness">AI Bug Automation Readiness</a>
+scores with bug bash outcomes. The tool evaluates repos on 20 checks across 4 phases
+(Understand, Navigate, Verify, Submit) that predict how well AI agents can autonomously find,
+fix, and verify bugs. Verify (testing) carries 46% of the total weight.</p>
+"""
+        html += '<table><thead><tr><th>Project</th><th>Repo(s)</th><th>Readiness Score</th><th>Level</th><th>Automation Rate</th><th>Nonfixable Rate</th></tr></thead><tbody>'
+        for row in ar_data:
+            proj = row["project"]
+            repo_name = row["repo_url"].rstrip("/").rsplit("/", 1)[-1].replace(".git", "")
+            bb = bb_by_proj.get(proj, {})
+            auto_rate = f'{bb.get("automation_rate", 0):.1f}%' if bb else "N/A"
+            nf_rate = f'{bb.get("nonfixable_rate", 0):.1f}%' if bb else "N/A"
+            html += f'<tr><td><strong>{proj}</strong></td><td>{repo_name}</td><td>{row["overall_score"]:.0f}/100</td><td>{row["certification_level"]}</td><td>{auto_rate}</td><td>{nf_rate}</td></tr>'
+        html += '</tbody></table>'
 
+
+        highlight_attrs = HIGHLIGHT_ATTRIBUTES[:8]
+        per_proj_attrs: dict[str, dict[str, float]] = {}
+        for row in ar_data:
+            findings = json.loads(row.get("findings_json") or "[]")
+            attr_scores = {}
+            for f in findings:
+                aid = f.get("attribute", {}).get("id", "")
+                if aid in highlight_attrs:
+                    attr_scores[aid] = f.get("score", 0)
+            per_proj_attrs[row["project"]] = attr_scores
+
+        if per_proj_attrs:
+            html += '<h3>Key Checks by Project</h3>'
+            html += '<table><thead><tr><th>Check</th>'
+            projs = sorted(per_proj_attrs.keys())
+            for p in projs:
+                html += f'<th>{p}</th>'
+            html += '</tr></thead><tbody>'
+            for attr in highlight_attrs:
+                nice = attr.replace("_", " ").title()
+                html += f'<tr><td>{nice}</td>'
+                for p in projs:
+                    val = per_proj_attrs[p].get(attr)
+                    html += f'<td>{val:.0f}/100</td>' if val is not None else '<td>N/A</td>'
+                html += '</tr>'
+            html += '</tbody></table>'
+
+        best = max(ar_data, key=lambda r: r["overall_score"])
+        worst = min(ar_data, key=lambda r: r["overall_score"])
+        best_bb = bb_by_proj.get(best["project"], {})
+        worst_bb = bb_by_proj.get(worst["project"], {})
+        if best["project"] != worst["project"]:
+            html += f"""
+<div class="insight">
+<strong>Key Finding:</strong> The highest-scoring repo (<strong>{best["project"]}</strong>, score {best["overall_score"]:.0f})
+has an automation rate of {best_bb.get("automation_rate", 0):.1f}%, while the lowest-scoring repo
+(<strong>{worst["project"]}</strong>, score {worst["overall_score"]:.0f}) has {worst_bb.get("automation_rate", 0):.1f}%.
+{"This suggests a positive correlation between bug automation readiness and AI automation success." if best_bb.get("automation_rate", 0) > worst_bb.get("automation_rate", 0) else "Interestingly, a higher readiness score does not guarantee better automation &mdash; other factors like issue complexity and component breadth also play a major role."}
+</div>
+"""
+    else:
+        html += """
+<h2 id="agentready" class="page-break">7. Bug Automation Readiness vs Bug Bash Outcomes</h2>
+<p><em>No readiness assessment data available. Run <code>make agentready</code> to collect repo scores and enable this section.</em></p>
+"""
+
+    html += f"""
 <!-- ============================================================ -->
-<h2 id="recommendations" class="page-break">7. Recommendations: Improving Prompts & Process</h2>
+<h2 id="recommendations" class="page-break">8. Recommendations: Improving Prompts & Process</h2>
 
-<p>Based on the data analysis, here are specific actions to improve AI success rates for future bug bashes.</p>
+<p>Based on the data analysis, here are specific actions to improve AI automation rates. Each is rated by impact and urgency.</p>
 
-<h3>6.1 Making Nonfixable Issues Fixable</h3>
+<h3>8.1 Making Nonfixable Issues Fixable</h3>
 
-<div class="recommendation critical">
-<strong>R1: Add Visual Regression Tooling</strong><br>
-{len(theme_data.get('UI / visual / frontend', []))} of {nonfixable} nonfixable issues ({len(theme_data.get('UI / visual / frontend', []))/nonfixable*100:.0f}%) involve UI/frontend work.
-AI cannot verify visual correctness without tooling.<br>
-<em>Action:</em> Integrate screenshot comparison (e.g., Percy, Chromatic, or Playwright visual snapshots) into
-the AI verification pipeline. This would allow AI to verify its own UI fixes.
-</div>
-
-<div class="recommendation critical">
-<strong>R2: Provide Environment-in-a-Box</strong><br>
-{len(theme_data.get('infrastructure / cluster / environment', []))} issues require cluster/infrastructure access.
-The current AI workflow operates on source code only.<br>
-<em>Action:</em> Create ephemeral test environments (e.g., Kind clusters with ODH pre-installed) that the AI agent
-can provision and test against. This is the highest-effort, highest-impact change.
-</div>
-
-<div class="recommendation action">
-<strong>R3: Improve Bug Report Templates</strong><br>
-{len(theme_data.get('insufficient context / vague description', []))} issues lacked sufficient context for AI to determine a fix.<br>
+<div class="recommendation rec-critical">
+<strong>R1: Improve Bug Report Templates</strong> <span class="severity-badge critical">Critical</span><br>
+{len(theme_data.get('insufficient context / vague description', []))} issues lacked sufficient context for AI to determine a fix.
+This is the lowest-effort, highest-impact change.<br>
 <em>Action:</em> Enforce structured JIRA templates with required fields: reproduction steps, expected vs actual behavior,
 environment details, and affected code paths. The triage prompt should reject issues that lack these.
 </div>
 
-<div class="recommendation action">
-<strong>R4: Enrich Triage Prompt with Rejection Criteria</strong><br>
+<div class="recommendation rec-critical">
+<strong>R2: Enrich Triage Prompt with Rejection Criteria</strong> <span class="severity-badge critical">Critical</span><br>
 The current triage prompt asks AI to label issues as fixable/nonfixable but doesn't provide clear criteria for the decision.<br>
 <em>Action:</em> Add explicit rejection criteria to the triage prompt:
 <blockquote>
@@ -1004,20 +1596,35 @@ and what additional context would make it fixable."
 </blockquote>
 </div>
 
-<h3>6.2 Converting Accelerated-Fix to Fully Automated</h3>
+<div class="recommendation rec-medium">
+<strong>R3: Add Visual Regression Tooling</strong> <span class="severity-badge medium">Medium</span><br>
+{len(theme_data.get('UI / visual / frontend', []))} of {nonfixable} nonfixable issues ({len(theme_data.get('UI / visual / frontend', []))/nonfixable*100:.0f}%) involve UI/frontend work.
+AI cannot verify visual correctness without tooling.<br>
+<em>Action:</em> Integrate screenshot comparison (e.g., Percy, Chromatic, or Playwright visual snapshots) into
+the AI verification pipeline. This would allow AI to verify its own UI fixes.
+</div>
 
-<div class="recommendation action">
-<strong>R5: Pre-load Component Architecture Context</strong><br>
-Components with 100% multi-attempt rates (Notebooks Extensions, AutoML, AI Evaluations, Notebooks Server)
-need richer context in the AI session.<br>
+<div class="recommendation rec-medium">
+<strong>R4: Provide Environment-in-a-Box</strong> <span class="severity-badge medium">Medium</span><br>
+{len(theme_data.get('infrastructure / cluster / environment', []))} issues require cluster/infrastructure access.
+The current AI workflow operates on source code only.<br>
+<em>Action:</em> Create ephemeral test environments (e.g., Kind clusters with ODH pre-installed) that the AI agent
+can provision and test against. High effort, high impact.
+</div>
+
+<h3>8.2 Converting Accelerated-Fix to Fully Automated</h3>
+
+<div class="recommendation rec-critical">
+<strong>R5: Pre-load Component Architecture Context</strong> <span class="severity-badge critical">Critical</span><br>
+Components with 100% multi-attempt rates need richer context in the AI session.<br>
 <em>Action:</em> For each component, create an <code>AI_CONTEXT.md</code> file in the repo root with:
 architecture overview, key abstractions, common bug patterns, test strategy, and links to related services.
 The fix prompt should explicitly reference this file. The <code>architecture-context</code> repo is a good start
 but needs component-specific depth.
 </div>
 
-<div class="recommendation action">
-<strong>R6: Structured Fix Prompt with Verification Steps</strong><br>
+<div class="recommendation rec-critical">
+<strong>R6: Structured Fix Prompt with Verification Steps</strong> <span class="severity-badge critical">Critical</span><br>
 The current workflow generates fix files but doesn't prescribe verification strategy.<br>
 <em>Action:</em> Update the fix prompt to require a verification plan before coding:
 <blockquote>
@@ -1027,17 +1634,8 @@ test first. Only then implement the fix. Run the tests and verify they pass."
 </blockquote>
 </div>
 
-<div class="recommendation action">
-<strong>R7: Batch Size Optimization</strong><br>
-The current guidance recommends batching ~20 issues per triage prompt. For fix attempts, single-issue
-focus produces better results.<br>
-<em>Action:</em> Keep batch triage (20 at a time) for classification, but switch to <strong>single-issue fix sessions</strong>
-where the AI agent gets one issue, the full repo context, and architectural docs. Multi-issue fix sessions
-split AI attention and reduce first-attempt success.
-</div>
-
-<div class="recommendation">
-<strong>R8: Feedback Loop from Failures</strong><br>
+<div class="recommendation rec-medium">
+<strong>R7: Feedback Loop from Failures</strong> <span class="severity-badge medium">Medium</span><br>
 {could_not} issues were marked "could not fix" and {verif_fail} had verification failures, but these outcomes
 don't feed back into future attempts.<br>
 <em>Action:</em> For each "could not fix" and "verification failed" outcome, require a structured comment on the JIRA:
@@ -1045,25 +1643,33 @@ what the AI tried, why it failed, and what context was missing. These comments b
 improving prompts and identifying systematic gaps.
 </div>
 
-<h3>6.3 Process Improvements</h3>
+<div class="recommendation rec-low">
+<strong>R8: Batch Size Optimization</strong> <span class="severity-badge low">Low</span><br>
+The current guidance recommends batching ~20 issues per triage prompt. For fix attempts, single-issue
+focus produces better results.<br>
+<em>Action:</em> Keep batch triage (20 at a time) for classification, but switch to <strong>single-issue fix sessions</strong>
+where the AI agent gets one issue, the full repo context, and architectural docs.
+</div>
 
-<div class="recommendation">
-<strong>R9: Two-Phase Triage</strong><br>
-The current single-pass triage misses nuance. {lc.get('ai-initiallymarkedfixable', 0)} issues were
+<h3>8.3 Process Improvements</h3>
+
+<div class="recommendation rec-medium">
+<strong>R9: Two-Phase Triage</strong> <span class="severity-badge medium">Medium</span><br>
+The current single-pass triage misses nuance. {sum(1 for i in issues if 'ai-initiallymarkedfixable' in _labels(i))} issues were
 initially marked fixable then reclassified.<br>
 <em>Action:</em> Phase 1: AI triage with the current prompt. Phase 2: Human review of AI's nonfixable
 classifications with a focus on "what context would make this fixable?" — then re-triage with enhanced context.
 </div>
 
-<div class="recommendation">
-<strong>R10: Model Selection Matters</strong><br>
+<div class="recommendation rec-low">
+<strong>R10: Model Selection Matters</strong> <span class="severity-badge low">Low</span><br>
 The ambient guidance recommends Opus 4.6, which is a strong choice for reasoning.
 However, different models may perform better for different issue types.<br>
 <em>Action:</em> Track which model was used per issue in future bug bashes.
 For UI-heavy components (Dashboard), multimodal models that can process screenshots may outperform text-only models.
 </div>
 
-<h3>6.4 Prompt Template Improvements</h3>
+<h3>8.4 Prompt Template Improvements</h3>
 
 <p>Based on the pattern analysis, here's an improved triage prompt that addresses the identified gaps:</p>
 
@@ -1098,10 +1704,104 @@ Add ai-triaged to all processed issues.
 Consult https://github.com/opendatahub-io/architecture-context
 </pre>
 
+<!-- ============================================================ -->
+<h2 id="appendix" class="page-break">Appendix: Methodology</h2>
+
+<h3>Data Source</h3>
+<p>All data is sourced from JIRA (Atlassian Cloud) via the JIRA REST API v3, collected using the
+<code>odh-eng-metrics</code> tooling. Issues are stored locally in a SQLite database and refreshed
+on each <code>make collect</code> run.</p>
+
+<table>
+<tbody>
+<tr><td><strong>Projects</strong></td><td>RHOAIENG, AIPCC, RHAIENG, INFERENG</td></tr>
+<tr><td><strong>Issue type filter</strong></td><td><code>issuetype = Bug</code> &mdash; {len(issues)} bugs of {len(issues) + non_bugs} total issues</td></tr>
+<tr><td><strong>Pre-bash exclusion</strong></td><td>Bugs resolved before {BUG_BASH_START} are excluded (triaged retroactively but already closed)</td></tr>
+<tr><td><strong>Collection JQL</strong></td><td>Issues matching labels <code>ai-triaged</code>, <code>ai-fixable</code>, <code>ai-nonfixable</code>, etc.</td></tr>
+<tr><td><strong>Baseline JQL</strong></td><td>{"<code>" + "project in (RHOAIENG, AIPCC, RHAIENG, INFERENG) AND issuetype = Bug AND created &lt;= 2026-03-22 AND (status in (New, Backlog, Refinement, To Do) OR status changed from (...) after 2026-03-22)</code> &mdash; total: " + str(total_display) if has_baseline else "Not collected (run <code>make collect</code> to fetch)"}</td></tr>
+<tr><td><strong>Bug bash period</strong></td><td>March 22&ndash;29, 2026</td></tr>
+<tr><td><strong>Report generated</strong></td><td>{datetime.now().strftime("%B %d, %Y %H:%M")}</td></tr>
+</tbody>
+</table>
+
+<h3>Total Issues (Backlog) vs Triaged by AI</h3>
+<p>The <strong>Total Issues (Backlog)</strong> count ({total_display}) represents all bugs across the four projects that
+were in an open status (New, Backlog, Refinement, or To Do) on the day the bug bash started (March 22, 2026),
+regardless of whether they had <code>ai-*</code> labels. This count is derived from a separate baseline JQL query
+run during <code>make collect</code>.</p>
+<p>The <strong>Triaged by AI</strong> count ({len(issues)}) is the subset of bugs that were actually processed by AI
+and received <code>ai-*</code> labels. The difference ({total_display - len(issues)}) represents bugs that existed
+in the backlog but were not reached by AI triage during the bug bash period.</p>
+
+<h3>Issue Classification</h3>
+<p>Each issue is assigned to exactly <strong>one</strong> category using a priority-based classification.
+When an issue has multiple (potentially conflicting) labels, the first matching rule wins:</p>
+
+<table>
+<thead><tr><th>Priority</th><th>Label</th><th>Classification</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td>1</td><td><code>ai-fully-automated</code></td><td>Automated</td><td>AI fixed it end-to-end, no human needed</td></tr>
+<tr><td>2</td><td><code>ai-accelerated-fix</code></td><td>Accelerated</td><td>AI contributed but a human finished the fix</td></tr>
+<tr><td>3</td><td><code>ai-could-not-fix</code></td><td>Could not fix</td><td>Deemed fixable at triage, but AI failed to produce a working fix</td></tr>
+<tr><td>4</td><td><code>ai-verification-failed</code></td><td>Verification failed</td><td>AI produced a fix but it didn't pass verification</td></tr>
+<tr><td>5</td><td><code>ai-nonfixable</code></td><td>Nonfixable</td><td>AI triage determined this issue cannot be fixed by AI</td></tr>
+<tr><td>6</td><td><code>ai-fixable</code></td><td>Fixable (pending)</td><td>Deemed fixable but no fix attempt has been made yet</td></tr>
+<tr><td>7</td><td><code>ai-triaged</code></td><td>Triaged only</td><td>AI reviewed but did not classify as fixable or nonfixable</td></tr>
+<tr><td>8</td><td>(none of the above)</td><td>Untriaged</td><td>Not yet processed by AI</td></tr>
+</tbody>
+</table>
+
+<p>Rows 1–4 and 6 are all counted as <strong>"fixable"</strong> for the automation rate denominator — they were all
+deemed fixable at triage, regardless of whether the fix attempt succeeded. The automation rate measures how many
+of those fixable issues were fully automated (row 1 only).</p>
+
+<p>When an issue has conflicting labels (e.g., both <code>ai-nonfixable</code> and <code>ai-accelerated-fix</code>),
+the highest-priority label wins. There are currently {conflicting_nf} such issue(s), which is why the nonfixable count here ({nonfixable})
+differs slightly from a raw JIRA label filter ({raw_nf_label}).</p>
+
+<h3>Key Metrics</h3>
+<table>
+<thead><tr><th>Metric</th><th>Formula</th><th>Description</th></tr></thead>
+<tbody>
+<tr><td><strong>Fixable</strong></td><td>automated + accelerated + could_not_fix + verif_failed + fixable_pending</td>
+<td>All issues classified into a fixable bucket (with or without an outcome)</td></tr>
+<tr><td><strong>Automation Rate</strong></td><td>fully_automated / fixable &times; 100</td>
+<td>Of issues deemed fixable, what percentage were solved end-to-end by AI without human intervention</td></tr>
+<tr><td><strong>Accelerated Rate</strong></td><td>accelerated_fix / fixable &times; 100</td>
+<td>Of issues deemed fixable, what percentage required AI + human collaboration</td></tr>
+<tr><td><strong>Nonfixable Rate</strong></td><td>nonfixable / (fixable + nonfixable) &times; 100</td>
+<td>Proportion of classified issues that AI could not address</td></tr>
+</tbody>
+</table>
+
+<h3>Temporal Bucketing</h3>
+<p>For the "Bug Bash Week vs Current State" section, issues are split by their JIRA <code>resolved</code> date:</p>
+<ul>
+<li><strong>Before bug bash:</strong> resolved date &lt; March 22 (pre-existing closures)</li>
+<li><strong>During bug bash:</strong> resolved date between March 22–29 inclusive</li>
+<li><strong>After bug bash:</strong> resolved date &ge; March 30</li>
+<li><strong>Unresolved:</strong> no resolved date in JIRA (may still have outcome labels)</li>
+</ul>
+
+<h3>Nonfixable Theme Analysis</h3>
+<p>Nonfixable issues are categorized into themes by keyword matching on the issue summary and description.
+Keywords include terms like "UI", "frontend", "dashboard" (→ UI/frontend), "cluster", "infra", "deploy"
+(→ Infrastructure), "flak", "intermittent", "timeout" (→ Flaky/timing). Issues not matching any theme
+keyword are categorized as "Other". This is an approximation — manual review would yield more precise categorization.</p>
+
+<h3>Tooling</h3>
+<ul>
+<li><strong>Data collection:</strong> <code>odh-eng-metrics</code> (<code>make collect</code>)</li>
+<li><strong>Report generation:</strong> <code>make bug-bash-report</code> (Python + matplotlib)</li>
+<li><strong>Storage:</strong> SQLite (<code>data/eng-metrics.sqlite</code>)</li>
+<li><strong>JIRA API:</strong> REST API v3 with <code>nextPageToken</code> pagination</li>
+</ul>
+
 <hr style="margin-top:40px;">
 <p style="color:#95a5a6;font-size:0.85em;">
-    Generated from {len(issues)} JIRA issues collected via odh-eng-metrics.
-    Data source: RHOAI Bug Bash March 23–27, 2026.
+    Generated from {len(issues)} AI-triaged JIRA Bug issues (of {total_display} total backlog) collected via
+    <a href="https://github.com/StevenTobin/ai-experiments/tree/main/odh-eng-metrics" style="color:#7f8c8d;">odh-eng-metrics</a>.
+    Data source: AI First Bug Bash March 22&ndash;29, 2026.
 </p>
 
 </body></html>"""
@@ -1113,44 +1813,96 @@ Consult https://github.com/opendatahub-io/architecture-context
 # ---------------------------------------------------------------------------
 
 def main():
+    import sys
+    output = Path(sys.argv[1]) if len(sys.argv) > 1 else OUTPUT_PATH
+
     store = Store("data/eng-metrics.sqlite")
-    issues = store.get_collection_issues("ai-bug-bash")
-    if not issues:
+    all_issues = store.get_collection_issues("ai-bug-bash")
+    if not all_issues:
         print("No issues found for ai-bug-bash collection")
         return
+
+    bugs = [i for i in all_issues if i.get("issue_type") == "Bug"]
+    non_bugs = len(all_issues) - len(bugs)
+    if non_bugs:
+        print(f"Filtered to Bugs only: {len(bugs)} of {len(all_issues)} ({non_bugs} non-Bug issues excluded)")
+
+    pre_resolved = [i for i in bugs if i.get("resolved") and i["resolved"][:10] < BUG_BASH_START]
+    issues = [i for i in bugs if not (i.get("resolved") and i["resolved"][:10] < BUG_BASH_START)]
+    if pre_resolved:
+        print(f"Excluded {len(pre_resolved)} bugs resolved before bug bash ({BUG_BASH_START}): {len(issues)} remain")
 
     for i in issues:
         i["_labels"] = _labels(i)
 
-    fixable = [i for i in issues if "ai-fixable" in i["_labels"]]
-    nonfixable_issues = [i for i in issues if "ai-nonfixable" in i["_labels"]]
-    accelerated = [i for i in issues if "ai-accelerated-fix" in i["_labels"]]
-    automated = [i for i in issues if "ai-fully-automated" in i["_labels"]]
-    could_not_fix = [i for i in issues if "ai-could-not-fix" in i["_labels"]]
-    verification_failed = [i for i in issues if "ai-verification-failed" in i["_labels"]]
+    # Build classification-based lists (each issue in exactly one bucket)
+    classified: dict[str, list[dict]] = defaultdict(list)
+    for i in issues:
+        classified[_classify_issue(i)].append(i)
+
+    automated = classified["automated"]
+    accelerated = classified["accelerated"]
+    could_not_fix = classified["could_not_fix"]
+    verification_failed = classified["verif_failed"]
+    nonfixable_issues = classified["nonfixable"]
+    fixable = automated + accelerated + could_not_fix + verification_failed + classified["fixable_pending"]
 
     print(f"Generating deep analysis for {len(issues)} issues...")
     print(f"  Fixable: {len(fixable)}, Nonfixable: {len(nonfixable_issues)}")
     print(f"  Automated: {len(automated)}, Accelerated: {len(accelerated)}")
     print(f"  Could not fix: {len(could_not_fix)}, Verification failed: {len(verification_failed)}")
 
+    # Build per-project map early (needed for baseline + charts)
+    by_proj: dict[str, list[dict]] = defaultdict(list)
+    for i in issues:
+        by_proj[_project_of(i)].append(i)
+
+    # Load baseline counts (total bug population at bash start, from JQL)
+    baseline_total = store.get_metric("baseline_total", "ai-bug-bash")
+    baseline_by_proj: dict[str, int] = {}
+    if baseline_total is not None:
+        print(f"Baseline total from JQL: {baseline_total}")
+        for proj in by_proj:
+            bv = store.get_metric("baseline_total", f"ai-bug-bash:{proj}")
+            if bv is not None:
+                baseline_by_proj[proj] = bv
+        if baseline_by_proj:
+            print(f"  Per-project baselines: {baseline_by_proj}")
+    else:
+        print("No baseline count found (run 'make collect' to fetch from JIRA).")
+
     # Generate charts
     print("Generating charts...")
+    nf_by_comp = chart_nonfixable_by_component(nonfixable_issues)
+    nf_themes = chart_nonfixable_themes(nonfixable_issues)
+    fix_vs_nf = chart_fixable_vs_nonfixable_components(fixable, nonfixable_issues)
+
     charts = {
-        "triage_funnel": chart_triage_funnel(issues),
+        "triage_funnel": chart_triage_funnel(issues, baseline_total=baseline_total),
         "outcome_distribution": chart_outcome_distribution(issues),
-        "nonfixable_by_component": chart_nonfixable_by_component(nonfixable_issues),
-        "nonfixable_themes": chart_nonfixable_themes(nonfixable_issues),
-        "fixable_vs_nonfixable": chart_fixable_vs_nonfixable_components(fixable, nonfixable_issues),
+        "nonfixable_by_component": nf_by_comp["total"],
+        "nonfixable_themes": nf_themes["total"],
+        "fixable_vs_nonfixable": fix_vs_nf["total"],
         "accelerated_vs_automated": chart_accelerated_vs_automated(accelerated, automated),
-        "daily_throughput": chart_daily_throughput(issues),
-        "priority_breakdown": chart_priority_breakdown(fixable, nonfixable_issues),
-        "success_rate": chart_success_rate_gauge(automated, accelerated, could_not_fix, verification_failed),
+        "success_rate": chart_automation_rate(fixable, automated, accelerated, could_not_fix, verification_failed),
+        "project_breakdown": chart_project_breakdown(issues, baseline_by_proj=baseline_by_proj),
+        "project_success_rate": chart_project_automation_rate(issues),
+        "project_dashboard_totals": chart_project_dashboard(
+            issues, "All Projects (Totals)", baseline_count=baseline_total),
         "time_to_fix": chart_time_to_fix_by_outcome(issues),
         "temporal_comparison": chart_temporal_comparison(issues),
-        "resolution_waterfall": chart_resolution_waterfall(issues),
-        "bash_week_daily": chart_bash_week_daily(issues),
     }
+
+    # Per-project dashboards
+    for proj, proj_issues in sorted(by_proj.items(), key=lambda x: -len(x[1])):
+        charts[f"project_dashboard_{proj}"] = chart_project_dashboard(
+            proj_issues, proj, baseline_count=baseline_by_proj.get(proj))
+    charts["_project_order"] = sorted(by_proj.keys(), key=lambda p: -len(by_proj[p]))
+
+    for proj in charts["_project_order"]:
+        charts[f"nonfixable_by_component_{proj}"] = nf_by_comp.get(proj)
+        charts[f"nonfixable_themes_{proj}"] = nf_themes.get(proj)
+        charts[f"fixable_vs_nonfixable_{proj}"] = fix_vs_nf.get(proj)
 
     # Deep analysis
     print("Running deep analysis...")
@@ -1169,14 +1921,34 @@ def main():
         "automated_samples": extract_sample_issues(automated, 5),
     }
 
+    # Bug Automation Readiness data (if available)
+    ar_data = store.get_agentready_assessments()
+    if ar_data:
+        print(f"Loading readiness data for {len(ar_data)} repo(s)...")
+        bb_by_proj = {}
+        for proj, proj_issues in by_proj.items():
+            p_cls = Counter(_classify_issue(i) for i in proj_issues)
+            p_fix = p_cls["automated"] + p_cls["accelerated"] + p_cls["could_not_fix"] + p_cls["verif_failed"] + p_cls["fixable_pending"]
+            p_nf = p_cls["nonfixable"]
+            bb_by_proj[proj] = {
+                "automation_rate": p_cls["automated"] / p_fix * 100 if p_fix else 0,
+                "nonfixable_rate": p_nf / (p_fix + p_nf) * 100 if (p_fix + p_nf) else 0,
+                "fixable": p_fix, "nonfixable": p_nf, "automated": p_cls["automated"],
+            }
+        analysis["agentready"] = ar_data
+        analysis["agentready_bb_by_proj"] = bb_by_proj
+    else:
+        print("No readiness data found (run 'make agentready' to collect).")
+
     # Generate HTML
     print("Generating HTML report...")
-    html = generate_html(issues, charts, analysis)
+    html = generate_html(issues, charts, analysis, non_bugs=non_bugs,
+                         baseline_total=baseline_total, baseline_by_proj=baseline_by_proj)
 
-    OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    OUTPUT_PATH.write_text(html, encoding="utf-8")
-    print(f"\nReport written to {OUTPUT_PATH}")
-    print(f"Open in browser: file://{OUTPUT_PATH.resolve()}")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(html, encoding="utf-8")
+    print(f"\nReport written to {output}")
+    print(f"Open in browser: file://{output.resolve()}")
 
 
 if __name__ == "__main__":

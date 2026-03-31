@@ -31,6 +31,36 @@ jira:
   # epic_link_field: customfield_12311140
   collections:
     - name: ai-bug-bash
+      projects:
+        - RHOAIENG
+        - AIPCC
+        - RHAIENG
+        - INFERENG
+      # Map JIRA projects to GitHub repos for AgentReady assessments.
+      # Leave a project out or use an empty list to skip it.
+      project_repos:
+        RHOAIENG:
+          - https://github.com/opendatahub-io/opendatahub-operator
+        AIPCC:
+          - https://github.com/python-wheel-build/fromager
+          - https://github.com/opendatahub-io/notebooks
+          - https://github.com/opendatahub-io/base-containers
+        RHAIENG:
+          - https://github.com/opendatahub-io/notebooks
+          - https://github.com/opendatahub-io/llama-stack-k8s-operator
+          - https://github.com/opendatahub-io/llama-stack-distribution
+        INFERENG:
+          - https://github.com/llm-d/llm-d
+          - https://github.com/llm-d/llm-d-inference-scheduler
+          - https://github.com/vllm-project/vllm
+      # Total bug population in the backlog when the bash started (no ai-* label required).
+      # Used as the "Total Issues" denominator in the deep analysis report.
+      baseline_jql: >-
+        project in ("Red Hat OpenShift AI Engineering", "AI Platform Core Components",
+        "Red Hat AI Engineering", "Inference Engineering Project")
+        and issuetype = Bug and created <= 2026-03-22
+        and (status in (New, Backlog, Refinement, "To Do")
+        or status changed from (New, Backlog, Refinement, "To Do") after 2026-03-22)
       labels:
         - ai-triaged
         - ai-fixable
@@ -41,7 +71,7 @@ jira:
         - ai-verification-failed
         - regressions-found
       analyzer: bug-bash
-      description: "AI Bug Bash — March 23-27 2026"
+      description: "AI Bug Bash — March 22-29 2026"
 
 per_release:
   min_version: "3.0.0"

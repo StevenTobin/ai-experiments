@@ -107,16 +107,30 @@ def track_pr_propagation(
         if ref:
             branch_refs[branch] = ref
 
+    # Expected branches + a tag entry = complete set for a PR
+    expected_branches = set(branch_refs.keys())
+
+    skipped = 0
     for i, pr in enumerate(recent_prs):
-        # Use stored merge_sha if available; fall back to expensive search.
+        existing_arrivals = store.get_branch_arrivals(repo_name, pr["number"])
+        existing_keys = {a["branch"] for a in existing_arrivals}
+        has_all_branches = expected_branches <= existing_keys
+        has_tag = any(k.startswith("tag:") for k in existing_keys)
+        if has_all_branches and has_tag:
+            skipped += 1
+            continue
+
         merge_sha = pr.get("merge_sha") or _find_merge_sha(upstream_path, pr)
         if not merge_sha:
             continue
 
-        if (i + 1) % 50 == 0:
-            log.info("Branch tracking progress: %d/%d PRs", i + 1, len(recent_prs))
+        if (i + 1 - skipped) % 50 == 0:
+            log.info("Branch tracking progress: %d/%d PRs (%d complete)",
+                     i + 1, len(recent_prs), skipped)
 
         for branch, ref in branch_refs.items():
+            if branch in existing_keys:
+                continue
             if not _commit_in_ref(upstream_path, merge_sha, ref):
                 continue
             tag_name, tag_date = _earliest_tag_on_branch(
@@ -126,14 +140,15 @@ def track_pr_propagation(
                 store.upsert_branch_arrival(repo_name, pr["number"], branch, tag_date)
                 count += 1
 
-        # Direct tag arrival: the earliest tag anywhere containing this commit
-        all_tags = _tags_containing(upstream_path, merge_sha, "v*")
-        if all_tags:
-            first_tag, first_date = all_tags[0]
-            store.upsert_branch_arrival(repo_name, pr["number"], f"tag:{first_tag}", first_date)
-            count += 1
+        if not has_tag:
+            all_tags = _tags_containing(upstream_path, merge_sha, "v*")
+            if all_tags:
+                first_tag, first_date = all_tags[0]
+                store.upsert_branch_arrival(repo_name, pr["number"], f"tag:{first_tag}", first_date)
+                count += 1
 
-    log.info("Tracked %d branch arrivals for %d PRs", count, len(recent_prs))
+    log.info("Tracked %d branch arrivals for %d PRs (%d already complete)",
+             count, len(recent_prs), skipped)
     return count
 
 
