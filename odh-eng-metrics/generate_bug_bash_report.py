@@ -25,6 +25,12 @@ from store.db import Store
 # ---------------------------------------------------------------------------
 
 OUTPUT_PATH = Path("data/bug-bash-deep-analysis.html")
+BUG_BASH_LABELS = [
+    "ai-triaged", "ai-fixable", "ai-nonfixable",
+    "ai-fully-automated", "ai-accelerated-fix",
+    "ai-could-not-fix", "ai-verification-failed", "regressions-found",
+]
+BUG_BASH_LABELS_DISPLAY = ", ".join(f"<code>{l}</code>" for l in BUG_BASH_LABELS)
 OUTCOME_LABELS = [
     "ai-fully-automated", "ai-accelerated-fix",
     "ai-could-not-fix", "ai-verification-failed", "regressions-found",
@@ -1063,6 +1069,15 @@ def generate_html(issues, charts, analysis, non_bugs=0, baseline_total=None, bas
     missing_triaged = len(issues) - raw_triaged_label
     conflicting_nf = raw_nf_label - nonfixable
 
+    # Breakdown: how our "Triaged by AI" total relates to a JIRA ai-triaged filter
+    open_statuses = {"New", "Backlog", "Refinement", "To Do"}
+    triaged_in_open = sum(1 for i in issues
+                          if "ai-triaged" in _labels(i) and i.get("status") in open_statuses)
+    triaged_not_open = raw_triaged_label - triaged_in_open
+    bb_label_set = set(BUG_BASH_LABELS)
+    no_triaged_has_bb = [i for i in issues if "ai-triaged" not in _labels(i)
+                         and any(l in bb_label_set for l in _labels(i))]
+
     gap = analysis["acceleration_gap"]
     theme_data = analysis["nonfixable_themes"]
     nf_samples = analysis["nonfixable_samples"]
@@ -1202,8 +1217,8 @@ def generate_html(issues, charts, analysis, non_bugs=0, baseline_total=None, bas
 <h2 id="exec-summary">1. Executive Summary</h2>
 
 <div class="stat-grid">
-    <div class="stat-box" title="{f'Backlog as of March 22: {total_display} bugs in New/Backlog/Refinement/To Do across RHOAIENG, AIPCC, RHAIENG, INFERENG. Estimated current backlog: ~{estimated_current} open ({total_resolved} resolved: {pre_bash_excluded} before bash + {resolved_during_or_after} during/after + {new_resolved} new; {total_new} new bugs filed since Mar 22). {untouched} bugs were not AI-labelled — their resolution status is unknown and assumed still open.' if has_baseline and estimated_current is not None else ('Bugs with ai-* labels only (' + str(non_bugs) + ' non-Bug issues excluded). Run make collect to fetch the full baseline count from JIRA.')}"><div class="number">{total_display}</div><div class="label">Total Issues (Backlog)</div></div>
-    <div class="stat-box purple" title="{'Of the ' + str(total_display) + ' backlog bugs, ' + str(from_backlog_count) + ' (' + f'{backlog_coverage_pct:.0f}' + '%) were AI-labelled. An additional ' + str(total_new) + ' new bugs created after Mar 22 were also triaged, for ' + str(len(issues)) + ' total.' if has_baseline else str(len(issues)) + ' issues with ai-* labels.'} {raw_triaged_label} have ai-triaged; {missing_triaged} have other ai-* labels but are missing ai-triaged."><div class="number">{len(issues)}</div><div class="label">Triaged by AI</div></div>
+    <div class="stat-box" title="{f'Backlog as of March 22: {total_display} bugs in New/Backlog/Refinement/To Do across RHOAIENG, AIPCC, RHAIENG, INFERENG. Estimated current backlog: ~{estimated_current} open ({total_resolved} resolved: {pre_bash_excluded} before bash + {resolved_during_or_after} during/after + {new_resolved} new; {total_new} new bugs filed since Mar 22). {untouched} bugs were not AI-labelled — their resolution status is unknown and assumed still open.' if has_baseline and estimated_current is not None else ('Bugs with bug bash labels only (' + str(non_bugs) + ' non-Bug issues excluded). Run make collect to fetch the full baseline count from JIRA.')}"><div class="number">{total_display}</div><div class="label">Total Issues (Backlog)</div></div>
+    <div class="stat-box purple" title="{'Of the ' + str(total_display) + ' backlog bugs, ' + str(from_backlog_count) + ' (' + f'{backlog_coverage_pct:.0f}' + '%) received bug bash labels. An additional ' + str(total_new) + ' new bugs created after Mar 22 were also labelled, for ' + str(len(issues)) + ' total.' if has_baseline else str(len(issues)) + ' issues with bug bash labels.'} {raw_triaged_label} have ai-triaged; {missing_triaged} have other bug bash labels but are missing ai-triaged. See Appendix for full breakdown."><div class="number">{len(issues)}</div><div class="label">Triaged by AI</div></div>
     <div class="stat-box" title="automated ({automated}) + accelerated ({accelerated}) + could-not-fix ({could_not}) + verif-failed ({verif_fail}) + fixable-pending ({cls_counts['fixable_pending']}). Includes all issues deemed fixable at triage, regardless of outcome."><div class="number">{fixable}</div><div class="label">Fixable</div></div>
     <div class="stat-box red" title="JIRA label filter shows {raw_nf_label}, but {conflicting_nf} issue(s) also have a higher-priority outcome label and are counted there instead. See Appendix for classification rules."><div class="number">{nonfixable}</div><div class="label">Nonfixable</div></div>
 </div>
@@ -1216,7 +1231,7 @@ def generate_html(issues, charts, analysis, non_bugs=0, baseline_total=None, bas
 </div>
 
 <p>Of <strong>{total_display}</strong> bugs in the backlog when the bug bash started (March 22),
-<strong>{from_backlog_count}</strong> ({backlog_coverage_pct:.0f}%) were triaged by AI with <code>ai-*</code> labels.
+<strong>{from_backlog_count}</strong> ({backlog_coverage_pct:.0f}%) received one or more bug bash labels.
 An additional <strong>{total_new}</strong> new bugs created after March 22 were also triaged, bringing the total to
 <strong>{len(issues)}</strong> AI-labelled bugs.
 Of those, <strong>{fixable}</strong> ({fixable/len(issues)*100:.0f}%) were
@@ -1739,7 +1754,7 @@ on each <code>make collect</code> run.</p>
 <tr><td><strong>Projects</strong></td><td>RHOAIENG, AIPCC, RHAIENG, INFERENG</td></tr>
 <tr><td><strong>Issue type filter</strong></td><td><code>issuetype = Bug</code> &mdash; {len(issues)} bugs of {len(issues) + non_bugs} total issues</td></tr>
 <tr><td><strong>Pre-bash exclusion</strong></td><td>Bugs resolved before {BUG_BASH_START} are excluded (triaged retroactively but already closed)</td></tr>
-<tr><td><strong>Collection JQL</strong></td><td>Issues matching labels <code>ai-triaged</code>, <code>ai-fixable</code>, <code>ai-nonfixable</code>, etc.</td></tr>
+<tr><td><strong>Collection JQL</strong></td><td>Issues matching any of the bug bash labels: {BUG_BASH_LABELS_DISPLAY}</td></tr>
 <tr><td><strong>Baseline JQL</strong></td><td>{"<code>" + "project in (RHOAIENG, AIPCC, RHAIENG, INFERENG) AND issuetype = Bug AND created &lt;= 2026-03-22 AND (status in (New, Backlog, Refinement, To Do) OR status changed from (...) after 2026-03-22)</code> &mdash; total: " + str(total_display) if has_baseline else "Not collected (run <code>make collect</code> to fetch)"}</td></tr>
 <tr><td><strong>Bug bash period</strong></td><td>March 22&ndash;29, 2026</td></tr>
 <tr><td><strong>Report generated</strong></td><td>{datetime.now().strftime("%B %d, %Y %H:%M")}</td></tr>
@@ -1749,12 +1764,63 @@ on each <code>make collect</code> run.</p>
 <h3>Total Issues (Backlog) vs Triaged by AI</h3>
 <p>The <strong>Total Issues (Backlog)</strong> count ({total_display}) represents all bugs across the four projects that
 were in an open status (New, Backlog, Refinement, or To Do) on the day the bug bash started (March 22, 2026),
-regardless of whether they had <code>ai-*</code> labels. This count is derived from a separate baseline JQL query
+regardless of whether they had bug bash labels. This count is derived from a separate baseline JQL query
 run during <code>make collect</code>.</p>
 <p>The <strong>Triaged by AI</strong> count ({len(issues)}) comprises <strong>{from_backlog_count}</strong> bugs from the
-original backlog that received <code>ai-*</code> labels ({backlog_coverage_pct:.0f}% of {total_display}), plus
-<strong>{total_new}</strong> new bugs created after March 22 that were also triaged. The remaining
+original backlog that received one or more bug bash labels ({backlog_coverage_pct:.0f}% of {total_display}), plus
+<strong>{total_new}</strong> new bugs created after March 22 that were also labelled. The remaining
 {total_display - from_backlog_count} backlog bugs were not reached by AI triage.</p>
+
+<h4>Bug Bash Labels</h4>
+<p>This report collects issues that have <strong>any</strong> of the following labels:
+{BUG_BASH_LABELS_DISPLAY}. An issue is included in our dataset if it has at least one of these labels,
+even if it is missing <code>ai-triaged</code>.</p>
+
+<h4>"Triaged by AI" Count Breakdown ({len(issues)})</h4>
+<table>
+<thead><tr><th>Category</th><th>Count</th><th>Explanation</th></tr></thead>
+<tbody>
+<tr><td>Bugs in backlog (New/Backlog/Refinement/To Do) at start of bug bash</td>
+    <td><strong>{total_display}</strong></td>
+    <td>Baseline JQL count as of March 22</td></tr>
+<tr><td>Backlog bugs that received bug bash labels</td>
+    <td><strong>{from_backlog_count}</strong></td>
+    <td>{backlog_coverage_pct:.0f}% of {total_display} backlog</td></tr>
+<tr><td>New bugs created after March 22 with bug bash labels</td>
+    <td><strong>{total_new}</strong></td>
+    <td>These were not part of the original backlog</td></tr>
+<tr><td><strong>Total issues in this report</strong></td>
+    <td><strong>{len(issues)}</strong></td>
+    <td>= {from_backlog_count} backlog + {total_new} new</td></tr>
+</tbody>
+</table>
+
+<h4>Why This Differs from a JIRA <code>ai-triaged</code> Filter</h4>
+<p>A JIRA query filtering on <code>labels in ("ai-triaged")</code> with the same projects and status filter
+returns fewer results than our {len(issues)}. The differences are:</p>
+<table>
+<thead><tr><th>Difference</th><th>Count</th><th>Explanation</th></tr></thead>
+<tbody>
+<tr><td>Issues with bug bash labels but <strong>no <code>ai-triaged</code></strong></td>
+    <td>{len(no_triaged_has_bb)}</td>
+    <td>Have outcome or triage labels (e.g. <code>ai-fixable</code>, <code>ai-could-not-fix</code>) but <code>ai-triaged</code> was not added.
+        Our collection catches these; a JIRA <code>ai-triaged</code> filter does not.</td></tr>
+<tr><td><code>ai-triaged</code> bugs <strong>not in backlog status</strong></td>
+    <td>{triaged_not_open}</td>
+    <td>Currently in Review ({sum(1 for i in issues if 'ai-triaged' in _labels(i) and i.get('status') == 'Review')}),
+        Closed ({sum(1 for i in issues if 'ai-triaged' in _labels(i) and i.get('status') == 'Closed')}),
+        Resolved ({sum(1 for i in issues if 'ai-triaged' in _labels(i) and i.get('status') == 'Resolved')}),
+        In Progress ({sum(1 for i in issues if 'ai-triaged' in _labels(i) and i.get('status') == 'In Progress')}),
+        Testing ({sum(1 for i in issues if 'ai-triaged' in _labels(i) and i.get('status') == 'Testing')}).
+        A JQL with <code>status changed from (...) after 2026-03-22</code> may miss bugs
+        that left backlog status <em>before</em> March 22.</td></tr>
+<tr><td><code>ai-triaged</code> bugs <strong>in backlog status</strong></td>
+    <td>{triaged_in_open}</td>
+    <td>These should match a JIRA <code>ai-triaged</code> filter with backlog status clause</td></tr>
+</tbody>
+</table>
+<p><strong>Pre-bash exclusions:</strong> {pre_bash_excluded} bugs that were resolved before March 22 are excluded from
+this report entirely (they were triaged retroactively but were already closed).</p>
 
 <h3>Issue Classification</h3>
 <p>Each issue is assigned to exactly <strong>one</strong> category using a priority-based classification.
