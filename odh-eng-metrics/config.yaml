@@ -41,6 +41,21 @@ jira:
       project_repos:
         RHOAIENG:
           - https://github.com/opendatahub-io/opendatahub-operator
+          - https://github.com/opendatahub-io/odh-dashboard
+          - https://github.com/opendatahub-io/kserve
+          - https://github.com/opendatahub-io/odh-model-controller
+          - https://github.com/opendatahub-io/data-science-pipelines-operator
+          - https://github.com/opendatahub-io/kubeflow
+          - https://github.com/opendatahub-io/kuberay
+          - https://github.com/opendatahub-io/trustyai-service-operator
+          - https://github.com/opendatahub-io/model-registry-operator
+          - https://github.com/opendatahub-io/training-operator
+          - https://github.com/opendatahub-io/feast
+          - https://github.com/opendatahub-io/trainer
+          - https://github.com/opendatahub-io/maas-billing
+          - https://github.com/opendatahub-io/mlflow-operator
+          - https://github.com/opendatahub-io/spark-operator
+          - https://github.com/opendatahub-io/workload-variant-autoscaler
         AIPCC:
           - https://github.com/python-wheel-build/fromager
           - https://github.com/opendatahub-io/notebooks

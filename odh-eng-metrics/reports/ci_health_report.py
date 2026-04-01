@@ -130,6 +130,29 @@ def _slice_period(all_data: dict, days: int) -> dict:
     }
 
 
+def _slice_range(all_data: dict, start_iso: str, end_iso: str) -> dict:
+    """Slice pre-loaded data for an explicit [start, end) time range."""
+    builds = [b for b in all_data["all_builds"]
+              if start_iso <= (b.get("started_at") or "") < end_iso]
+    prs = [p for p in all_data["all_prs"]
+           if start_iso <= (p.get("merged_at") or "") < end_iso]
+    reverts = [r for r in all_data["all_reverts"]
+               if start_iso <= (r.get("date") or "") < end_iso]
+
+    build_ids = {b["build_id"] for b in builds}
+    test_results = [t for t in all_data["all_test_results"] if t["build_id"] in build_ids]
+    steps = [s for s in all_data["all_steps"] if s["build_id"] in build_ids]
+
+    return {
+        "builds": builds,
+        "prs": prs,
+        "test_results": test_results,
+        "steps": steps,
+        "reverts": reverts,
+        "cutoff": start_iso,
+    }
+
+
 def _compute_period_metrics(data: dict) -> dict:
     """Compute all metrics for a single time period."""
     builds = data["builds"]
@@ -614,6 +637,17 @@ def generate(store: Store, output_path: str | Path = "data/ci-health-report.html
         data = _slice_period(all_data, days)
         period_metrics[name] = _compute_period_metrics(data)
 
+    # This week vs last week (ISO calendar weeks: Mon-Sun)
+    now_utc = datetime.now(timezone.utc)
+    this_monday = now_utc - timedelta(days=now_utc.weekday())
+    this_monday = this_monday.replace(hour=0, minute=0, second=0, microsecond=0)
+    last_monday = this_monday - timedelta(days=7)
+
+    this_week_data = _slice_range(all_data, this_monday.isoformat(), now_utc.isoformat())
+    last_week_data = _slice_range(all_data, last_monday.isoformat(), this_monday.isoformat())
+    this_week_metrics = _compute_period_metrics(this_week_data)
+    last_week_metrics = _compute_period_metrics(last_week_data)
+
     # Generate charts
     charts = {}
     charts["kpi_comparison"] = chart_kpi_comparison(period_metrics)
@@ -675,6 +709,7 @@ def generate(store: Store, output_path: str | Path = "data/ci-health-report.html
   .warning {{ background: #2a1a00; border-left: 4px solid #ffa726; padding: 12px 16px;
               margin: 12px 0; border-radius: 0 6px 6px 0; }}
   .no-data {{ color: #78909c; font-style: italic; }}
+  .wow-table td:last-child {{ font-weight: 600; font-size: 14px; }}
   .period-grid {{ display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px;
                   margin: 20px 0; }}
   .period-card {{ background: #16213e; border: 1px solid #333355; border-radius: 8px;
@@ -694,6 +729,7 @@ def generate(store: Store, output_path: str | Path = "data/ci-health-report.html
 <strong>Contents</strong>
 <ol>
   <li><a href="#exec">Executive Summary</a></li>
+  <li><a href="#wow">This Week vs Last Week</a></li>
   <li><a href="#kpis">KPI Comparison</a></li>
   <li><a href="#weekly">Weekly Trends</a></li>
   <li><a href="#failures">Failure Analysis</a></li>
@@ -747,28 +783,160 @@ def generate(store: Store, output_path: str | Path = "data/ci-health-report.html
   <strong>Wasted CI time this week:</strong> {week["wasted_hours"]:.0f} hours spent on failed cycles.
 </div>"""
 
+    # Week-over-week comparison section
+    tw = this_week_metrics
+    lw = last_week_metrics
+    tw_s = tw["summary"]
+    lw_s = lw["summary"]
+    this_week_label = this_monday.strftime("%b %d")
+    last_week_label = last_monday.strftime("%b %d")
+    has_both_weeks = tw_s["total_cycles"] > 0 and lw_s["total_cycles"] > 0
+
+    def _delta_indicator(current, previous, fmt="pct", higher_is_better=True):
+        """Return an HTML span with arrow and color for a delta."""
+        if current is None or previous is None:
+            return '<span style="color:#78909c">—</span>'
+        diff = current - previous
+        if fmt == "pct":
+            diff_display = f"{abs(diff * 100):.1f}pp"
+        elif fmt == "float":
+            diff_display = f"{abs(diff):.2f}"
+        else:
+            diff_display = f"{abs(diff):.0f}"
+        if abs(diff) < 0.001:
+            return '<span style="color:#78909c">&#x2194; no change</span>'
+        is_improvement = (diff > 0) == higher_is_better
+        arrow = "&#x25B2;" if diff > 0 else "&#x25BC;"
+        color = "#66bb6a" if is_improvement else "#ef5350"
+        return f'<span style="color:{color}">{arrow} {diff_display}</span>'
+
+    html += f"""
+<!-- ============================================================ -->
+<h2 id="wow">This Week vs Last Week</h2>
+<p class="subtitle">Calendar weeks: {last_week_label} &rarr; {this_week_label} (Mon&ndash;Sun)</p>
+"""
+    if not has_both_weeks:
+        if tw_s["total_cycles"] == 0 and lw_s["total_cycles"] == 0:
+            html += '<p class="no-data">No CI data for either week.</p>'
+        elif lw_s["total_cycles"] == 0:
+            html += '<p class="no-data">No CI data for last week — comparison not available.</p>'
+        else:
+            html += '<p class="no-data">No CI data for this week yet — comparison not available.</p>'
+    else:
+        html += f"""
+<table>
+<thead><tr>
+    <th>Metric</th>
+    <th>Last Week ({last_week_label})</th>
+    <th>This Week ({this_week_label})</th>
+    <th>Change</th>
+</tr></thead>
+<tbody>
+<tr>
+    <td>CI Cycles</td>
+    <td>{lw_s["total_cycles"]}</td>
+    <td>{tw_s["total_cycles"]}</td>
+    <td>{_delta_indicator(tw_s["total_cycles"], lw_s["total_cycles"], fmt="int", higher_is_better=True)}</td>
+</tr>
+<tr>
+    <td>First-Pass Rate</td>
+    <td>{_safe_pct(lw_s.get("first_pass_success_rate"))}</td>
+    <td>{_safe_pct(tw_s.get("first_pass_success_rate"))}</td>
+    <td>{_delta_indicator(tw_s.get("first_pass_success_rate"), lw_s.get("first_pass_success_rate"), fmt="pct", higher_is_better=True)}</td>
+</tr>
+<tr>
+    <td>Failure Rate</td>
+    <td>{_safe_pct(lw_s.get("cycle_failure_rate"))}</td>
+    <td>{_safe_pct(tw_s.get("cycle_failure_rate"))}</td>
+    <td>{_delta_indicator(tw_s.get("cycle_failure_rate"), lw_s.get("cycle_failure_rate"), fmt="pct", higher_is_better=False)}</td>
+</tr>
+<tr>
+    <td>Retest Tax</td>
+    <td>{f'{lw_s["retest_tax"]:.2f}x' if lw_s.get("retest_tax") else 'N/A'}</td>
+    <td>{f'{tw_s["retest_tax"]:.2f}x' if tw_s.get("retest_tax") else 'N/A'}</td>
+    <td>{_delta_indicator(tw_s.get("retest_tax"), lw_s.get("retest_tax"), fmt="float", higher_is_better=False)}</td>
+</tr>
+<tr>
+    <td>Wasted Hours</td>
+    <td>{lw["wasted_hours"]:.0f}h</td>
+    <td>{tw["wasted_hours"]:.0f}h</td>
+    <td>{_delta_indicator(tw["wasted_hours"], lw["wasted_hours"], fmt="int", higher_is_better=False)}</td>
+</tr>
+<tr>
+    <td>Broken Tests</td>
+    <td>{len(lw["broken_tests"])}</td>
+    <td>{len(tw["broken_tests"])}</td>
+    <td>{_delta_indicator(len(tw["broken_tests"]), len(lw["broken_tests"]), fmt="int", higher_is_better=False)}</td>
+</tr>
+<tr>
+    <td>Infra Failures</td>
+    <td>{lw["infra_failures"]}</td>
+    <td>{tw["infra_failures"]}</td>
+    <td>{_delta_indicator(tw["infra_failures"], lw["infra_failures"], fmt="int", higher_is_better=False)}</td>
+</tr>
+<tr>
+    <td>Code/Test Failures</td>
+    <td>{lw["code_failures"]}</td>
+    <td>{tw["code_failures"]}</td>
+    <td>{_delta_indicator(tw["code_failures"], lw["code_failures"], fmt="int", higher_is_better=False)}</td>
+</tr>
+</tbody>
+</table>
+"""
+        # Highlight the biggest improvement and biggest regression
+        comparisons = [
+            ("First-Pass Rate", tw_s.get("first_pass_success_rate"), lw_s.get("first_pass_success_rate"), True),
+            ("Failure Rate", tw_s.get("cycle_failure_rate"), lw_s.get("cycle_failure_rate"), False),
+            ("Wasted Hours", tw["wasted_hours"], lw["wasted_hours"], False),
+            ("Broken Tests", len(tw["broken_tests"]), len(lw["broken_tests"]), False),
+        ]
+        improvements = []
+        regressions = []
+        for name, curr, prev, higher_better in comparisons:
+            if curr is None or prev is None:
+                continue
+            diff = curr - prev
+            is_improvement = (diff > 0) == higher_better
+            if abs(diff) < 0.001:
+                continue
+            if is_improvement:
+                improvements.append((name, curr, prev, diff))
+            else:
+                regressions.append((name, curr, prev, diff))
+
+        if improvements:
+            best = improvements[0]
+            html += f"""<div class="insight">
+  <strong>Improvement:</strong> {best[0]} got better this week.
+</div>"""
+        if regressions:
+            worst = regressions[0]
+            html += f"""<div class="warning">
+  <strong>Regression:</strong> {worst[0]} got worse this week.
+</div>"""
+
     # ----------------------------------------------------------------
     html += f"""
 <!-- ============================================================ -->
-<h2 id="kpis">2. KPI Comparison Across Periods</h2>
+<h2 id="kpis">3. KPI Comparison Across Periods</h2>
 {img("kpi_comparison")}
 
 <!-- ============================================================ -->
-<h2 id="weekly">3. Weekly Trends</h2>
+<h2 id="weekly">4. Weekly Trends</h2>
 
-<h3>3.1 Cycle Pass/Fail Volume</h3>
+<h3>4.1 Cycle Pass/Fail Volume</h3>
 {img("weekly_failures")}
 
-<h3>3.2 Failure Rate Trend</h3>
+<h3>4.2 Failure Rate Trend</h3>
 {img("weekly_failure_rate")}
 
-<h3>3.3 Failures by Job Type</h3>
+<h3>4.3 Failures by Job Type</h3>
 {img("weekly_by_job")}
 
 <!-- ============================================================ -->
-<h2 id="failures">4. Failure Analysis</h2>
+<h2 id="failures">5. Failure Analysis</h2>
 
-<h3>4.1 Infrastructure vs Code Failures</h3>
+<h3>5.1 Infrastructure vs Code Failures</h3>
 {img("infra_vs_code")}
 """
 
@@ -786,7 +954,7 @@ def generate(store: Store, output_path: str | Path = "data/ci-health-report.html
     # ----------------------------------------------------------------
     html += f"""
 <!-- ============================================================ -->
-<h2 id="tests">5. Test Health</h2>
+<h2 id="tests">6. Test Health</h2>
 {img("test_health")}
 """
 
@@ -801,7 +969,7 @@ def generate(store: Store, output_path: str | Path = "data/ci-health-report.html
     # ----------------------------------------------------------------
     html += f"""
 <!-- ============================================================ -->
-<h2 id="components">6. Component Health</h2>
+<h2 id="components">7. Component Health</h2>
 <p>Component failure rates based on which components PRs touched (last month).</p>
 {img("component_health")}
 """
@@ -825,7 +993,7 @@ def generate(store: Store, output_path: str | Path = "data/ci-health-report.html
     # ----------------------------------------------------------------
     html += f"""
 <!-- ============================================================ -->
-<h2 id="duration">7. CI Duration</h2>
+<h2 id="duration">8. CI Duration</h2>
 {img("cycle_duration")}
 """
 
@@ -842,7 +1010,7 @@ def generate(store: Store, output_path: str | Path = "data/ci-health-report.html
     # ----------------------------------------------------------------
     html += f"""
 <!-- ============================================================ -->
-<h2 id="steps">8. Top Failing CI Steps (3 Months)</h2>
+<h2 id="steps">9. Top Failing CI Steps (3 Months)</h2>
 {img("top_failing_steps")}
 """
 

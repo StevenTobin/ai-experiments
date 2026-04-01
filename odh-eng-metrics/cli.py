@@ -343,10 +343,10 @@ def _print_text_report(result: dict) -> None:
         for t in ai.get("by_tool", []):
             click.echo(f"    {t['tool']:>10s}: {t['count']}")
         ai_months = ai.get("months", [])
-        recent_ai = [m for m in ai_months if m["ai_commits"] > 0][-6:]
-        if recent_ai:
+        recent_months = ai_months[-8:]
+        if recent_months:
             click.echo(f"  Monthly trend (recent):")
-            for m in recent_ai:
+            for m in recent_months:
                 click.echo(f"    {m['month']}: {m['ai_commits']} AI commits ({m['ai_pct']:.1f}% of {m['total_prs']} PRs)")
 
     # CI Efficiency
