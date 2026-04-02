@@ -378,9 +378,52 @@
       "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }
     },
     {
+      "title": "Weekly Pass / Fail Volume",
+      "description": "Stacked bar chart showing passes and failures per week. Visualizes both CI volume and failure proportion over time.",
+      "type": "barchart",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 19 },
+      "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "eng-tables" },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://exporter:9090/api/tables/weekly-pass-fail",
+          "url_options": { "method": "GET" },
+          "parser": "backend",
+          "columns": [
+            { "selector": "week", "text": "Week", "type": "string" },
+            { "selector": "passes", "text": "Passes", "type": "number" },
+            { "selector": "failures", "text": "Failures", "type": "number" }
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Passes" },
+            "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "green" } }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Failures" },
+            "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }]
+          }
+        ]
+      },
+      "options": {
+        "xField": "Week",
+        "stacking": "normal",
+        "barWidth": 0.7,
+        "showValue": "never",
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      }
+    },
+    {
       "title": "Failure Rate Trends (%)",
       "type": "row",
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 19 },
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 27 },
       "collapsed": false
     },
     {
@@ -648,18 +691,115 @@
       "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }
     },
     {
-      "title": "E2E Test Failures",
+      "title": "E2E Test Stability",
       "type": "row",
       "gridPos": { "h": 1, "w": 24, "x": 0, "y": 55 },
       "collapsed": false
     },
     {
+      "title": "Broken Tests",
+      "description": "Tests failing in >80% of builds they run in. These are deterministically broken and block CI.",
+      "type": "stat",
+      "gridPos": { "h": 5, "w": 4, "x": 0, "y": 56 },
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "targets": [{ "refId": "A", "expr": "odh_eng_test_stability_broken_count{period=\"all\"}", "instant": true }],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 3 },
+              { "color": "red", "value": 8 }
+            ]
+          }
+        }
+      },
+      "options": { "colorMode": "background" }
+    },
+    {
+      "title": "Flaky Tests",
+      "description": "Tests failing in 20-80% of builds. Non-deterministic failures inflating retest tax.",
+      "type": "stat",
+      "gridPos": { "h": 5, "w": 4, "x": 4, "y": 56 },
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "targets": [{ "refId": "A", "expr": "odh_eng_test_stability_flaky_count{period=\"all\"}", "instant": true }],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 5 },
+              { "color": "red", "value": 15 }
+            ]
+          }
+        }
+      },
+      "options": { "colorMode": "background" }
+    },
+    {
       "title": "",
       "type": "text",
-      "gridPos": { "h": 4, "w": 24, "x": 0, "y": 56 },
+      "gridPos": { "h": 5, "w": 16, "x": 8, "y": 56 },
       "options": {
         "mode": "markdown",
-        "content": "### Drill into test failures\n\nDetailed test-level pass rates, top failing tests, failure messages, and suite duration trends are in the **openshift-ci-observability** stack:\n\n- [CI Tests Dashboard →](/d/ci-tests) — Top failing tests, pass rates, slowest tests, JUnit failure messages\n- [CI Investigation →](/d/ci-investigation) — Per-PR failure analysis, build history, step errors\n- [CI Logs →](/d/ci-logs) — Raw ci-operator and step logs filtered by PR/build"
+        "content": "### Deep-dive into test failures\n\nDetailed test-level pass rates, failure messages, and logs are in the **openshift-ci-observability** stack:\n\n**[CI Tests →](/d/ci-tests)** | **[CI Investigation →](/d/ci-investigation)** | **[CI Logs →](/d/ci-logs)** | **[Engineering Intelligence →](/d/eng-intelligence)**"
+      }
+    },
+    {
+      "title": "Top Broken Tests",
+      "description": "Tests with >80% failure rate across all builds. Fix these first — they block CI for every PR that triggers them.",
+      "type": "table",
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 61 },
+      "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "eng-tables" },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://exporter:9090/api/tables/test-stability",
+          "url_options": { "method": "GET" },
+          "parser": "backend",
+          "columns": [
+            { "selector": "test_name", "text": "Test Name", "type": "string" },
+            { "selector": "category", "text": "Status", "type": "string" },
+            { "selector": "fail_builds", "text": "Failed Builds", "type": "number" },
+            { "selector": "total_builds", "text": "Total Builds", "type": "number" },
+            { "selector": "fail_rate", "text": "Fail Rate", "type": "number" },
+            { "selector": "last_failure", "text": "Last Failure", "type": "string" }
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Fail Rate" },
+            "properties": [{ "id": "unit", "value": "percentunit" }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Status" },
+            "properties": [
+              { "id": "custom.cellOptions", "value": { "type": "color-text" } },
+              {
+                "id": "mappings",
+                "value": [
+                  { "type": "value", "options": { "broken": { "text": "BROKEN", "color": "red" } } },
+                  { "type": "value", "options": { "flaky": { "text": "FLAKY", "color": "orange" } } }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Test Name" },
+            "properties": [{ "id": "custom.width", "value": 500 }]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [{ "displayName": "Fail Rate", "desc": true }]
       }
     }
   ],

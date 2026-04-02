@@ -127,7 +127,34 @@ AND ji.status_category != 'Done'
 ORDER BY ji.priority
 ```
 
-### Step 7: AI adoption signal
+### Step 7: Manifest SHA bumps this week
+
+```sql
+-- Manifest-update PRs merged this week
+SELECT mp.number, mp.title, mp.merged_at
+FROM merged_prs mp
+WHERE mp.base_branch = 'main'
+  AND mp.merged_at >= '{THIS_MON}'
+  AND mp.is_manifest_update = 1
+ORDER BY mp.merged_at
+```
+
+If any manifest PRs were found, get the upstream changelogs:
+```sql
+-- Upstream SHA deltas for this week's manifest bumps
+SELECT cmp.component, cmp.pr_number, cmp.pinned_sha,
+       msd.old_sha, msd.new_sha, msd.commit_count, msd.commits_json
+FROM component_manifest_pins cmp
+LEFT JOIN manifest_sha_deltas msd
+    ON msd.component = cmp.component AND msd.new_sha = cmp.pinned_sha
+WHERE cmp.pr_number IN (
+    SELECT number FROM merged_prs
+    WHERE base_branch = 'main' AND merged_at >= '{THIS_MON}' AND is_manifest_update = 1
+)
+ORDER BY cmp.component
+```
+
+### Step 8: AI adoption signal
 
 ```sql
 SELECT is_ai_assisted,
@@ -154,7 +181,8 @@ For each test that newly broke this week:
 1. Query `ci_test_results` to find the first failure timestamp
 2. Query `merged_prs` for PRs merged just before that timestamp
 3. Check if the test name contains a component name matching the PR's `changed_components`
-4. Write a hypothesis: "Test X likely broke due to PR #N (merged YYYY-MM-DD, touched component Y)"
+4. Check `component_manifest_pins` for manifest SHA bumps in the breakage window for the same component — if found, query `manifest_sha_deltas` for the upstream changelog
+5. Write a hypothesis: "Test X likely broke due to PR #N (merged YYYY-MM-DD, touched component Y)" — or if a manifest bump is the likely cause: "Test X likely broke due to upstream changes in {component} pulled in by manifest bump PR #{N} ({commit_count} upstream commits)"
 
 ### Cross-reference patterns
 
@@ -205,13 +233,15 @@ Also render the same HTML as a canvas titled "CI Weekly Digest - {date range}" f
 
 6. **Component Health** - Horizontal bar chart (Chart.js) of failure rate by component.
 
-7. **Infrastructure vs Code** - Donut chart showing the split.
+7. **Manifest Bumps** (if any this week) - Table: component, manifest PR, upstream commit count, notable upstream commit messages (from `manifest_sha_deltas.commits_json`). Flag components where a bump coincides with a new test breakage.
 
-8. **Top Failing Steps** - Horizontal bar chart with infra steps in purple, code steps in blue.
+8. **Infrastructure vs Code** - Donut chart showing the split.
 
-9. **JIRA Context** (if data exists) - Table of open bugs linked to failing PRs.
+9. **Top Failing Steps** - Horizontal bar chart with infra steps in purple, code steps in blue.
 
-10. **AI Adoption** (if data exists) - Comparison of AI vs human PR pass rates.
+10. **JIRA Context** (if data exists) - Table of open bugs linked to failing PRs.
+
+11. **AI Adoption** (if data exists) - Comparison of AI vs human PR pass rates.
 
 ### Design
 

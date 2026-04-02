@@ -11,8 +11,11 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 
 from prometheus_client import Gauge, generate_latest, CONTENT_TYPE_LATEST
 
+from collections import Counter, defaultdict
+
 from metrics.calculator import compute_all
 from metrics import ci_efficiency
+from reports.failure_patterns import _detect_manifest_regressions, _detect_regression_onset
 from store.db import Store
 
 log = logging.getLogger(__name__)
@@ -94,7 +97,7 @@ _PIPELINE_GAUGES = [PIPE_ACCUM, PIPE_DOWNSTREAM]
 # Monthly breakdowns use a "window" label so panels filter by the same dropdown.
 
 WINDOWS = {
-    "last_month": 1,
+    "last_month": 2,
     "last_3_months": 3,
     "last_6_months": 6,
     "last_year": 12,
@@ -199,6 +202,14 @@ COMP_INFRA_FAILURE_PCT = Gauge("odh_eng_component_infra_failure_pct",
     "% of failures attributed to infrastructure per component", ["component"])
 COMP_CODE_FAILURE_PCT = Gauge("odh_eng_component_code_failure_pct",
     "% of failures attributed to code per component", ["component"])
+
+# --- Test stability & manifest regressions ---
+
+TEST_STABILITY_BROKEN = Gauge("odh_eng_test_stability_broken_count", "Number of broken tests (>80% fail rate)", ["period"])
+TEST_STABILITY_FLAKY = Gauge("odh_eng_test_stability_flaky_count", "Number of flaky tests (20-80% fail rate)", ["period"])
+MANIFEST_REGRESSIONS_TOTAL = Gauge("odh_eng_manifest_regressions_total", "Detected manifest-induced CI regressions", ["period"])
+
+_STABILITY_GAUGES = [TEST_STABILITY_BROKEN, TEST_STABILITY_FLAKY, MANIFEST_REGRESSIONS_TOTAL]
 
 _GIT_CI_LABELED_GAUGES = [
     COMP_CI_FAILURE_RATE, COMP_CI_RETEST_TAX, COMP_CI_PR_COUNT, COMP_CI_AVG_DURATION,
@@ -715,8 +726,169 @@ def _build_table_data(result: dict) -> None:
         })
     _TABLE_DATA["jira-failure-reasons"] = rows
 
-    # Weekly component failures (for stacked bar chart)
-    _TABLE_DATA["weekly-component-failures"] = data.get("weekly_component_failures", [])
+    # Weekly component failures — pivot to wide format for Grafana bar chart.
+    # Input:  [{"week": "2026-03-09", "component": "cmd", "failures": 3}, ...]
+    # Output: [{"week": "2026-03-09", "cmd": 3, "kserve": 5, ...}, ...]
+    raw_weekly = data.get("weekly_component_failures", [])
+    weekly_wide: dict[str, dict[str, int]] = {}
+    for entry in raw_weekly:
+        wk = entry["week"]
+        if wk not in weekly_wide:
+            weekly_wide[wk] = {"week": wk}
+        weekly_wide[wk][entry["component"]] = entry["failures"]
+    _TABLE_DATA["weekly-component-failures"] = sorted(
+        weekly_wide.values(), key=lambda r: r["week"],
+    )
+
+
+def _build_stability_tables(store: Store) -> None:
+    """Build test-stability, manifest-timeline, manifest-regressions, and
+    test-regression-attribution table data from SQLite."""
+
+    # --- test-stability ---
+    try:
+        test_rows = store.conn.execute("""
+            SELECT tr.test_name,
+                   COUNT(DISTINCT CASE WHEN tr.status = 'failed' THEN tr.build_id END) AS fail_builds,
+                   COUNT(DISTINCT tr.build_id) AS total_builds,
+                   MAX(CASE WHEN tr.status = 'failed' THEN cb.started_at END) AS last_failure
+            FROM ci_test_results tr
+            JOIN ci_builds cb ON cb.build_id = tr.build_id
+            WHERE tr.is_leaf = 1
+            GROUP BY tr.test_name
+            HAVING fail_builds >= 2
+        """).fetchall()
+    except Exception:
+        test_rows = []
+
+    stability = []
+    broken_count = 0
+    flaky_count = 0
+    for r in test_rows:
+        total = r["total_builds"]
+        fails = r["fail_builds"]
+        if total == 0:
+            continue
+        rate = fails / total
+        if rate > 0.8:
+            cat = "broken"
+            broken_count += 1
+        elif rate >= 0.2:
+            cat = "flaky"
+            flaky_count += 1
+        else:
+            continue
+        stability.append({
+            "test_name": r["test_name"],
+            "fail_builds": fails,
+            "total_builds": total,
+            "fail_rate": round(rate, 3),
+            "category": cat,
+            "last_failure": r["last_failure"] or "",
+        })
+    stability.sort(key=lambda x: x["fail_rate"], reverse=True)
+    _TABLE_DATA["test-stability"] = stability
+
+    for gauge in _STABILITY_GAUGES:
+        gauge._metrics.clear()
+    TEST_STABILITY_BROKEN.labels(period="all").set(broken_count)
+    TEST_STABILITY_FLAKY.labels(period="all").set(flaky_count)
+
+    # --- manifest-timeline ---
+    # Exclude HEAD-baseline rows (pr_number IS NULL) — those are snapshots,
+    # not PR-driven changes, and would clutter the table with empty PR columns.
+    try:
+        pin_rows = store.conn.execute("""
+            SELECT component, pinned_sha, branch, pr_number, captured_at
+            FROM component_manifest_pins
+            WHERE pr_number IS NOT NULL
+            ORDER BY captured_at DESC
+            LIMIT 200
+        """).fetchall()
+    except Exception:
+        pin_rows = []
+
+    _TABLE_DATA["manifest-timeline"] = [
+        {
+            "component": r["component"],
+            "pinned_sha": r["pinned_sha"][:12],
+            "branch": r["branch"] or "",
+            "pr_number": r["pr_number"],
+            "captured_at": r["captured_at"],
+        }
+        for r in pin_rows
+    ]
+
+    # --- manifest-regressions ---
+    try:
+        manifest_prs = [
+            dict(p) for p in store.conn.execute("""
+                SELECT number, title, merged_at, merge_sha, changed_files, changed_components
+                FROM merged_prs
+                WHERE is_manifest_update = 1 AND merged_at IS NOT NULL
+                ORDER BY merged_at DESC LIMIT 10
+            """).fetchall()
+        ]
+        all_builds = [dict(b) for b in store.get_ci_builds()]
+        all_steps = store.get_all_build_steps() if all_builds else []
+        build_start_map = {
+            b["build_id"]: b.get("started_at", "")
+            for b in all_builds if b.get("started_at")
+        }
+        regressions = _detect_manifest_regressions(
+            manifest_prs, all_builds, all_steps, build_start_map,
+        )
+    except Exception:
+        log.debug("manifest-regressions table build failed", exc_info=True)
+        regressions = []
+
+    reg_rows = []
+    for reg in regressions[:20]:
+        mpr = reg.get("manifest_pr", {})
+        reg_rows.append({
+            "pr_number": mpr.get("number"),
+            "merged_at": mpr.get("merged_at", ""),
+            "title": (mpr.get("title") or "")[:80],
+            "affected_step": reg["step"],
+            "failure_rate_before": round(reg["before_rate"], 3),
+            "failure_rate_after": round(reg["after_rate"], 3),
+            "delta": round(reg["increase"], 3),
+        })
+    _TABLE_DATA["manifest-regressions"] = reg_rows
+    MANIFEST_REGRESSIONS_TOTAL.labels(period="all").set(len(regressions))
+
+    # --- test-regression-attribution ---
+    # Include broken (>80%) and high-flaky (>50%) tests, sorted worst-first
+    attr_candidates = [t for t in stability if t["fail_rate"] > 0.5]
+    attr_candidates.sort(key=lambda t: t["fail_rate"], reverse=True)
+    attr_names = [t["test_name"] for t in attr_candidates][:15]
+    attributions = []
+    if attr_names:
+        try:
+            all_test_results = [
+                dict(t) for t in store.conn.execute(
+                    "SELECT * FROM ci_test_results WHERE is_leaf = 1"
+                ).fetchall()
+            ]
+            build_map = {b["build_id"]: b for b in all_builds}
+            merged_prs = [dict(p) for p in store.get_merged_prs(base_branch="main")]
+            for tname in attr_names:
+                onset = _detect_regression_onset(
+                    tname, all_test_results, build_map, merged_prs,
+                )
+                if onset and onset.get("causal_pr"):
+                    attributions.append({
+                        "test_name": tname,
+                        "causal_pr": onset["causal_pr"],
+                        "pr_title": (onset.get("pr_title") or "")[:80],
+                        "onset_date": onset.get("onset_date", ""),
+                        "confidence": onset.get("confidence", "low"),
+                        "pattern": onset.get("pattern", ""),
+                    })
+        except Exception:
+            log.debug("test-regression-attribution build failed", exc_info=True)
+
+    _TABLE_DATA["test-regression-attribution"] = attributions
 
 
 class _MetricsHandler(BaseHTTPRequestHandler):
@@ -766,6 +938,7 @@ def start_server(cfg: dict, port: int = 9090, refresh_interval: int = 3600) -> N
             result = compute_all(store, lookback_days=lookback, min_version=min_ver)
             _update_metrics(result)
             _build_table_data(result)
+            _build_stability_tables(store)
             store.close()
             log.info("Metrics updated successfully")
         except Exception:

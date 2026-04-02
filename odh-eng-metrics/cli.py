@@ -11,7 +11,7 @@ from pathlib import Path
 import click
 import yaml
 
-from collector import agentready_collector, ai_commit_detector, branch_tracker, cherry_pick_detector, ci_collector, code_analyzer, jira_collector, pr_collector, revert_detector, tag_collector
+from collector import agentready_collector, ai_commit_detector, branch_tracker, cherry_pick_detector, ci_collector, code_analyzer, jira_collector, manifest_tracker, pr_collector, revert_detector, tag_collector
 from collector.repo_manager import ensure_repos
 from metrics.calculator import compute_all
 from store.db import Store
@@ -89,12 +89,27 @@ def collect(force: bool) -> None:
     n += ai_commit_detector.collect_ai_commits(store, downstream_path, ds_name, lookback_days=lookback)
     click.echo(f"  {n} AI-assisted commit markers found")
 
+    click.echo("Tracking component manifest SHA pins (git only)...")
+    n = manifest_tracker.collect_manifest_pins(store, upstream_path)
+    click.echo(f"  {n} manifest pin records stored")
+
+    click.echo("Fetching upstream changelogs for manifest SHA deltas (GitHub API)...")
+    n = manifest_tracker.collect_manifest_deltas(store)
+    if n > 0:
+        click.echo(f"  {n} manifest deltas fetched")
+    else:
+        click.echo("  no new deltas to fetch (or GITHUB_TOKEN not set)")
+
     click.echo("Collecting CI build data (VictoriaMetrics)...")
     n = ci_collector.collect_ci_builds(store, cfg, lookback_days=lookback)
     if n > 0:
         click.echo(f"  {n} CI builds stored")
     else:
         click.echo("  no CI data (CI Observability stack may not be running)")
+
+    click.echo("Collecting metadata for open/unmerged PRs referenced in CI (GitHub API)...")
+    n = pr_collector.collect_open_pr_metadata(store, repo_name, cfg)
+    click.echo(f"  {n} open PR metadata records stored")
 
     click.echo("Analyzing code risk (hotspots/gocyclo)...")
     n = code_analyzer.analyze_code_risk(store, upstream_path, repo_name, force=force)

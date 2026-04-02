@@ -141,18 +141,29 @@ FROM ci_builds WHERE started_at >= '{CUTOFF}' AND duration_seconds IS NOT NULL
 ### Step 8: Manifest regression detection
 
 ```sql
--- Recent manifest-update PRs (last 30 days)
+-- Recent manifest-update PRs (last 30 days) using the is_manifest_update flag
 SELECT number, title, merged_at
 FROM merged_prs
 WHERE base_branch = 'main'
   AND merged_at >= date('now', '-30 days')
-  AND (title LIKE '%update manifest%' OR title LIKE '%bump%image%'
-       OR title LIKE '%chore(deps)%' OR title LIKE '%chore%manifest%sha%')
+  AND is_manifest_update = 1
 ORDER BY merged_at DESC
-LIMIT 5
 ```
 
-For each manifest PR, compare step failure rates before vs after:
+For each manifest PR, get the upstream SHA deltas to see what component code changed:
+```sql
+-- Upstream changelog for manifest bumps in the last 30 days
+SELECT cmp.component, cmp.pr_number, cmp.captured_at,
+       msd.old_sha, msd.new_sha, msd.commit_count, msd.commits_json
+FROM component_manifest_pins cmp
+LEFT JOIN manifest_sha_deltas msd
+    ON msd.component = cmp.component AND msd.new_sha = cmp.pinned_sha
+WHERE cmp.pr_number IS NOT NULL
+  AND cmp.captured_at >= date('now', '-30 days')
+ORDER BY cmp.captured_at DESC
+```
+
+Then compare step failure rates before vs after each manifest PR:
 ```sql
 -- Before the manifest PR merged
 SELECT step_name,
@@ -176,6 +187,8 @@ GROUP BY step_name
 ```
 
 A regression is: after_error_rate - before_error_rate > 15pp AND after_error_rate > 25%.
+
+When a regression is detected and a manifest delta exists for the same component, include the upstream commit messages in the report — this helps the team decide whether to revert the bump or fix the upstream issue.
 
 ### Step 9: Code risk correlation
 
@@ -227,7 +240,8 @@ For each broken test (fail_pct > 80):
 1. Find the earliest failure in the last 30 days
 2. Find PRs merged just before that date
 3. Score candidate PRs by component overlap with the test name
-4. Report: "Test X has been broken since {date}, likely caused by PR #{N}"
+4. Check `component_manifest_pins` for manifest SHA bumps in the breakage window for the same component — if found, query `manifest_sha_deltas` for the upstream changelog and include it in the suspected cause
+5. Report: "Test X has been broken since {date}, likely caused by PR #{N}" — or "likely caused by upstream changes in {component} (manifest bump PR #{N}, {commit_count} upstream commits)"
 
 ### Code risk correlation
 
@@ -259,7 +273,7 @@ Rank all findings by estimated CI hours saved if fixed:
 1. Broken tests (blocking every PR) - highest impact
 2. Top flaky tests (causing retests) - multiply fails * avg_duration
 3. Infrastructure patterns - if consistent, report upstream
-4. Manifest regressions - revert or fix the upstream image
+4. Manifest regressions - revert the bump or fix the upstream issue (cite specific upstream commits from `manifest_sha_deltas`)
 5. High-risk components - longer-term refactoring
 
 ## Output
@@ -303,7 +317,7 @@ Also render the same HTML as a canvas titled "CI Deep Analysis - opendatahub-ope
 
 7. **Component Health** - Horizontal bar chart of failure rate by component. Overlay code risk score as a secondary indicator.
 
-8. **Manifest Regressions** (if detected) - Table: step, before rate, after rate, delta, manifest PR.
+8. **Manifest Regressions** (if detected) - Table: component, manifest PR, before rate, after rate, delta, upstream commit count, notable upstream commits (from `manifest_sha_deltas.commits_json`).
 
 9. **Top Failing Steps** - Horizontal bar chart, purple for infra, blue for code.
 

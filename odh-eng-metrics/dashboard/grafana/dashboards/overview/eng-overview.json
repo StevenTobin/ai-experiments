@@ -484,7 +484,7 @@
       "description": "Percentage of total merged PRs that resulted in a failure signal.\n\nFormula: (patch releases + reverts on main + downstream branches with cherry-picks) / total PRs merged to main.\n\nDORA bands: Elite < 5%, High < 10%, Medium < 15%, Low > 15%.\nA low rate means most changes ship without causing production issues."
     },
     {
-      "title": "Change Failure Rate",
+      "title": "Change Failure Rate (Trend)",
       "type": "gauge",
       "gridPos": {
         "h": 7,

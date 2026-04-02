@@ -282,10 +282,60 @@
       }
     },
     {
+      "id": 16,
+      "type": "table",
+      "title": "Top Failure Reason per Component",
+      "description": "The most common CI error message for each component. Helps identify systemic issues across PRs touching the same component.",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 30 },
+      "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "eng-tables" },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://exporter:9090/api/tables/component-failure-reasons",
+          "url_options": { "method": "GET" },
+          "parser": "backend",
+          "columns": [
+            { "selector": "component", "text": "Component", "type": "string" },
+            { "selector": "top_reason", "text": "Top Failure Reason", "type": "string" },
+            { "selector": "reason_count", "text": "Occurrences", "type": "number" }
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Top Failure Reason" },
+            "properties": [{ "id": "custom.width", "value": 600 }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Occurrences" },
+            "properties": [
+              { "id": "thresholds", "value": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "yellow", "value": 5 },
+                  { "color": "red", "value": 15 }
+                ]
+              }},
+              { "id": "custom.cellOptions", "value": { "type": "color-background", "mode": "gradient" } }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [{ "displayName": "Occurrences", "desc": true }]
+      }
+    },
+    {
       "id": 20,
       "type": "row",
       "title": "Code Hotspots",
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 30 },
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 38 },
       "collapsed": false
     },
     {
@@ -431,10 +481,86 @@
       }
     },
     {
+      "id": 32,
+      "type": "table",
+      "title": "CI Health by Issue Type",
+      "description": "CI health aggregated by Jira issue type (Bug, Story, Task, etc). Shows which types of work cause the most CI pain.",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 56 },
+      "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "eng-tables" },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://exporter:9090/api/tables/jira-type-health",
+          "url_options": { "method": "GET" },
+          "parser": "backend",
+          "columns": [
+            { "selector": "issue_type", "text": "Issue Type", "type": "string" },
+            { "selector": "failure_rate", "text": "Failure Rate", "type": "number" },
+            { "selector": "retest_tax", "text": "Retest Tax", "type": "number" },
+            { "selector": "ci_cycles", "text": "CI Cycles", "type": "number" },
+            { "selector": "prs", "text": "PRs", "type": "number" }
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Failure Rate" },
+            "properties": [{ "id": "unit", "value": "percentunit" }]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [{ "displayName": "Failure Rate", "desc": true }]
+      }
+    },
+    {
+      "id": 33,
+      "type": "table",
+      "title": "CI Health by Priority",
+      "description": "CI health aggregated by Jira priority (Critical, Major, Minor, etc). Shows whether high-priority work has better or worse CI outcomes.",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 56 },
+      "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "eng-tables" },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://exporter:9090/api/tables/jira-priority-health",
+          "url_options": { "method": "GET" },
+          "parser": "backend",
+          "columns": [
+            { "selector": "priority", "text": "Priority", "type": "string" },
+            { "selector": "failure_rate", "text": "Failure Rate", "type": "number" },
+            { "selector": "retest_tax", "text": "Retest Tax", "type": "number" },
+            { "selector": "ci_cycles", "text": "CI Cycles", "type": "number" },
+            { "selector": "prs", "text": "PRs", "type": "number" }
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Failure Rate" },
+            "properties": [{ "id": "unit", "value": "percentunit" }]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [{ "displayName": "Failure Rate", "desc": true }]
+      }
+    },
+    {
       "id": 40,
       "type": "row",
       "title": "AI-Assisted Code in CI",
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 56 },
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 64 },
       "collapsed": false
     },
     {
@@ -641,17 +767,19 @@
           "url": "http://exporter:9090/api/tables/weekly-component-failures",
           "url_options": { "method": "GET" },
           "parser": "backend",
-          "columns": [
-            { "selector": "week", "text": "Week", "type": "string" },
-            { "selector": "component", "text": "Component", "type": "string" },
-            { "selector": "failures", "text": "Failures", "type": "number" }
-          ]
+          "columns": []
         }
       ],
       "fieldConfig": {
         "defaults": {
           "custom": { "fillOpacity": 80 }
-        }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "week" },
+            "properties": [{ "id": "custom.hideFrom", "value": { "legend": true, "tooltip": true, "viz": false } }]
+          }
+        ]
       },
       "options": {
         "orientation": "vertical",
@@ -659,17 +787,331 @@
         "groupWidth": 0.7,
         "stacking": "normal",
         "xTickLabelRotation": -45,
-        "xField": "Week",
+        "xField": "week",
         "showValue": "never",
         "legend": { "displayMode": "table", "placement": "right", "calcs": ["sum"] },
         "tooltip": { "mode": "multi", "sort": "desc" }
       },
-      "transformations": [
-        {
-          "id": "prepareTimeSeries",
-          "options": { "format": "many" }
+      "transformations": []
+    },
+    {
+      "id": 80,
+      "type": "row",
+      "title": "Test Stability",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 90 },
+      "collapsed": false
+    },
+    {
+      "id": 81,
+      "type": "stat",
+      "title": "Broken Tests",
+      "description": "Tests failing in >80% of builds they run in. These are deterministically broken and block CI for every PR that triggers them.",
+      "gridPos": { "h": 5, "w": 6, "x": 0, "y": 91 },
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "targets": [{ "refId": "A", "expr": "odh_eng_test_stability_broken_count{period=\"all\"}", "instant": true }],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 3 },
+              { "color": "red", "value": 8 }
+            ]
+          }
         }
-      ]
+      },
+      "options": { "colorMode": "background" }
+    },
+    {
+      "id": 82,
+      "type": "stat",
+      "title": "Flaky Tests",
+      "description": "Tests failing in 20-80% of builds. Non-deterministic failures that erode developer trust in CI and inflate retest tax.",
+      "gridPos": { "h": 5, "w": 6, "x": 6, "y": 91 },
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "targets": [{ "refId": "A", "expr": "odh_eng_test_stability_flaky_count{period=\"all\"}", "instant": true }],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 5 },
+              { "color": "red", "value": 15 }
+            ]
+          }
+        }
+      },
+      "options": { "colorMode": "background" }
+    },
+    {
+      "id": 83,
+      "type": "text",
+      "title": "",
+      "gridPos": { "h": 5, "w": 12, "x": 12, "y": 91 },
+      "options": {
+        "mode": "markdown",
+        "content": "### Deep-dive into test failures\n\nBroken = fails >80% of runs. Flaky = fails 20-80%. Use these links to investigate individual tests:\n\n**[CI Tests →](/d/ci-tests)** | **[CI Logs →](/d/ci-logs)** | **[CI Investigation →](/d/ci-investigation)**"
+      }
+    },
+    {
+      "id": 84,
+      "type": "table",
+      "title": "Test Stability — Broken & Flaky Tests",
+      "description": "All tests with >=2 failures classified by stability. Broken (>80% fail rate) should be fixed immediately. Flaky (20-80%) erode CI trust. Use deep-dive links to investigate root causes.",
+      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 96 },
+      "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "eng-tables" },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://exporter:9090/api/tables/test-stability",
+          "url_options": { "method": "GET" },
+          "parser": "backend",
+          "columns": [
+            { "selector": "test_name", "text": "Test Name", "type": "string" },
+            { "selector": "category", "text": "Status", "type": "string" },
+            { "selector": "fail_builds", "text": "Failed Builds", "type": "number" },
+            { "selector": "total_builds", "text": "Total Builds", "type": "number" },
+            { "selector": "fail_rate", "text": "Fail Rate", "type": "number" },
+            { "selector": "last_failure", "text": "Last Failure", "type": "string" }
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Fail Rate" },
+            "properties": [{ "id": "unit", "value": "percentunit" }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Status" },
+            "properties": [
+              { "id": "custom.cellOptions", "value": { "type": "color-text" } },
+              {
+                "id": "mappings",
+                "value": [
+                  { "type": "value", "options": { "broken": { "text": "BROKEN", "color": "red" } } },
+                  { "type": "value", "options": { "flaky": { "text": "FLAKY", "color": "orange" } } }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Test Name" },
+            "properties": [{ "id": "custom.width", "value": 500 }]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [{ "displayName": "Fail Rate", "desc": true }]
+      }
+    },
+    {
+      "id": 85,
+      "type": "table",
+      "title": "Test Regression Attribution",
+      "description": "For each broken test, the PR most likely to have introduced the regression. Pattern: pr_under_test = the PR's own changes break it; merged_to_main = a previously merged PR broke it for everyone.",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 108 },
+      "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "eng-tables" },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://exporter:9090/api/tables/test-regression-attribution",
+          "url_options": { "method": "GET" },
+          "parser": "backend",
+          "columns": [
+            { "selector": "test_name", "text": "Test Name", "type": "string" },
+            { "selector": "causal_pr", "text": "Causal PR", "type": "number" },
+            { "selector": "pr_title", "text": "PR Title", "type": "string" },
+            { "selector": "onset_date", "text": "Onset Date", "type": "string" },
+            { "selector": "confidence", "text": "Confidence", "type": "string" },
+            { "selector": "pattern", "text": "Pattern", "type": "string" }
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Test Name" },
+            "properties": [{ "id": "custom.width", "value": 400 }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Causal PR" },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Open PR on GitHub",
+                    "url": "https://github.com/opendatahub-io/opendatahub-operator/pull/${__data.fields[\"Causal PR\"]}",
+                    "targetBlank": true
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": 90,
+      "type": "row",
+      "title": "Manifest Regressions",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 116 },
+      "collapsed": false
+    },
+    {
+      "id": 91,
+      "type": "stat",
+      "title": "Manifest Regressions Detected",
+      "description": "Number of CI step regressions correlated with manifest update PRs. A manifest regression means a component SHA bump caused a failure rate spike in one or more CI steps.",
+      "gridPos": { "h": 5, "w": 6, "x": 0, "y": 117 },
+      "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+      "targets": [{ "refId": "A", "expr": "odh_eng_manifest_regressions_total{period=\"all\"}", "instant": true }],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 2 },
+              { "color": "red", "value": 5 }
+            ]
+          }
+        }
+      },
+      "options": { "colorMode": "background" }
+    },
+    {
+      "id": 92,
+      "type": "table",
+      "title": "Manifest-Induced CI Regressions",
+      "description": "CI steps whose failure rate spiked after a manifest update PR merged. Delta = failure rate increase (after - before). Steps with >15% increase and >25% post-merge failure rate are flagged.",
+      "gridPos": { "h": 10, "w": 18, "x": 6, "y": 117 },
+      "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "eng-tables" },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://exporter:9090/api/tables/manifest-regressions",
+          "url_options": { "method": "GET" },
+          "parser": "backend",
+          "columns": [
+            { "selector": "pr_number", "text": "PR #", "type": "number" },
+            { "selector": "title", "text": "PR Title", "type": "string" },
+            { "selector": "affected_step", "text": "Affected Step", "type": "string" },
+            { "selector": "failure_rate_before", "text": "Before", "type": "number" },
+            { "selector": "failure_rate_after", "text": "After", "type": "number" },
+            { "selector": "delta", "text": "Delta", "type": "number" },
+            { "selector": "merged_at", "text": "Merged At", "type": "string" }
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Before" },
+            "properties": [{ "id": "unit", "value": "percentunit" }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "After" },
+            "properties": [{ "id": "unit", "value": "percentunit" }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Delta" },
+            "properties": [
+              { "id": "unit", "value": "percentunit" },
+              { "id": "thresholds", "value": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "yellow", "value": 0.15 },
+                  { "color": "red", "value": 0.3 }
+                ]
+              }},
+              { "id": "custom.cellOptions", "value": { "type": "color-background", "mode": "gradient" } }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "PR #" },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Open PR on GitHub",
+                    "url": "https://github.com/opendatahub-io/opendatahub-operator/pull/${__data.fields[\"PR #\"]}",
+                    "targetBlank": true
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [{ "displayName": "Delta", "desc": true }]
+      }
+    },
+    {
+      "id": 93,
+      "type": "table",
+      "title": "Recent Manifest SHA Bumps",
+      "description": "Timeline of component manifest SHA changes from get_all_manifests.sh. Shows which upstream component versions are pinned and when they changed.",
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 127 },
+      "datasource": { "type": "yesoreyeram-infinity-datasource", "uid": "eng-tables" },
+      "targets": [
+        {
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "url": "http://exporter:9090/api/tables/manifest-timeline",
+          "url_options": { "method": "GET" },
+          "parser": "backend",
+          "columns": [
+            { "selector": "component", "text": "Component", "type": "string" },
+            { "selector": "pinned_sha", "text": "Pinned SHA", "type": "string" },
+            { "selector": "branch", "text": "Branch", "type": "string" },
+            { "selector": "pr_number", "text": "PR #", "type": "number" },
+            { "selector": "captured_at", "text": "Captured At", "type": "string" }
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "PR #" },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Open PR on GitHub",
+                    "url": "https://github.com/opendatahub-io/opendatahub-operator/pull/${__data.fields[\"PR #\"]}",
+                    "targetBlank": true
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [{ "displayName": "Captured At", "desc": true }]
+      }
     }
   ],
   "schemaVersion": 39

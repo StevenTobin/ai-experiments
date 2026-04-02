@@ -97,27 +97,28 @@ def _detect_manifest_regressions(
         if len(after_bids) < 3:
             continue
 
-        before_stats: dict[str, dict] = defaultdict(lambda: {"fail": 0, "total": 0})
-        after_stats: dict[str, dict] = defaultdict(lambda: {"fail": 0, "total": 0})
+        n_before = len(before_bids)
+        n_after = len(after_bids)
+
+        before_fail: dict[str, int] = defaultdict(int)
+        after_fail: dict[str, int] = defaultdict(int)
 
         for bid in before_bids:
             for s in step_by_build.get(bid, []):
-                before_stats[s["step_name"]]["total"] += 1
                 if s.get("level") == "Error":
-                    before_stats[s["step_name"]]["fail"] += 1
+                    before_fail[s["step_name"]] += 1
 
         for bid in after_bids:
             for s in step_by_build.get(bid, []):
-                after_stats[s["step_name"]]["total"] += 1
                 if s.get("level") == "Error":
-                    after_stats[s["step_name"]]["fail"] += 1
+                    after_fail[s["step_name"]] += 1
 
-        for step_name, after in after_stats.items():
-            if step_name in seen_steps or after["fail"] < 2:
+        for step_name, af in after_fail.items():
+            if step_name in seen_steps or af < 2:
                 continue
-            before = before_stats.get(step_name, {"fail": 0, "total": 0})
-            before_rate = before["fail"] / before["total"] if before["total"] else 0.0
-            after_rate = after["fail"] / after["total"] if after["total"] else 0.0
+            bf = before_fail.get(step_name, 0)
+            before_rate = bf / n_before if n_before else 0.0
+            after_rate = af / n_after if n_after else 0.0
 
             increase = after_rate - before_rate
             if increase > 0.15 and after_rate > 0.25:
@@ -127,8 +128,8 @@ def _detect_manifest_regressions(
                     "manifest_pr": mpr,
                     "before_rate": before_rate,
                     "after_rate": after_rate,
-                    "after_failures": after["fail"],
-                    "after_total": after["total"],
+                    "after_failures": af,
+                    "after_total": n_after,
                     "increase": increase,
                     "is_infra": any(
                         s.get("is_infra")

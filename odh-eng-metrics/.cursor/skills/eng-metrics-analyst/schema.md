@@ -35,6 +35,7 @@ PRs merged to upstream branches. One row per PR.
 | is_ai_assisted | INT | 1 = AI commit markers detected |
 | changed_files | TEXT | JSON array of file paths |
 | changed_components | TEXT | JSON array of component names |
+| is_manifest_update | INT | 1 = PR changed manifest SHAs or `get_all_manifests.sh` |
 
 **PK**: (repo, number)
 
@@ -101,6 +102,8 @@ One row per CI build (Prow job run).
 | peak_cpu_cores | REAL | Max CPU usage |
 | peak_memory_bytes | REAL | Max memory |
 | total_step_seconds | REAL | Sum of all step durations |
+| base_sha | TEXT | SHA of main branch at presubmit time (from GCS started.json) |
+| pull_sha | TEXT | SHA of the PR head at presubmit time |
 
 ### ci_build_steps
 Per-step breakdown within a build.
@@ -128,7 +131,7 @@ Failure messages extracted from CI logs.
 **PK**: (build_id, message)
 
 ### ci_test_results
-JUnit test results from CI.
+JUnit test results from CI. Both passed and failed leaf tests are collected.
 
 | Column | Type | Notes |
 |--------|------|-------|
@@ -139,9 +142,83 @@ JUnit test results from CI.
 | status | TEXT | `passed`, `failed`, `skipped` |
 | duration_seconds | REAL | |
 | is_leaf | INT | 1 = leaf test (no children) |
-| failure_message | TEXT | |
+| failure_message | TEXT | Enriched from VictoriaLogs or GCS JUnit XML |
 
 **PK**: (build_id, test_name, test_variant)
+
+### ci_pr_metadata
+Metadata for PRs referenced in `ci_builds` but not in `merged_prs` (open or closed-without-merge). Fetched from GitHub API.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| repo | TEXT | `owner/repo` |
+| number | INT | PR number |
+| title | TEXT | |
+| author | TEXT | GitHub username |
+| state | TEXT | `open`, `closed` |
+| jira_keys | TEXT | JSON array of JIRA keys extracted from title + body |
+| changed_files | TEXT | JSON array of file paths |
+| changed_components | TEXT | JSON array of component names |
+| fetched_at | TEXT | When we last fetched from GitHub |
+
+**PK**: (repo, number)
+
+**Querying with merged_prs**: To get title/author/jira_keys for any PR number, COALESCE across both tables:
+```sql
+SELECT cb.pr_number,
+       COALESCE(mp.title, cpm.title) AS title,
+       COALESCE(mp.author, cpm.author) AS author,
+       COALESCE(mp.jira_keys, cpm.jira_keys) AS jira_keys
+FROM ci_builds cb
+LEFT JOIN merged_prs mp ON mp.number = cb.pr_number
+LEFT JOIN ci_pr_metadata cpm ON cpm.number = cb.pr_number
+```
+
+## Component Manifest Tracking Tables
+
+### component_manifest_pins
+Tracks which upstream SHA each component is pinned to at each manifest-update PR (and at current HEAD). Parsed from `get_all_manifests.sh` in the operator repo.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| component | TEXT | Manifest key, e.g. `kserve`, `dashboard`, `ray` |
+| repo_url | TEXT | Upstream repo URL, e.g. `https://github.com/opendatahub-io/kserve` |
+| branch | TEXT | Upstream branch (nullable if bare SHA) |
+| pinned_sha | TEXT | Commit SHA the component is pinned to |
+| source_path | TEXT | Path within the upstream repo, e.g. `config` |
+| captured_at | TEXT | When this pin was recorded (merge timestamp of the PR, or current time for HEAD) |
+| pr_number | INT | Operator PR that set this pin (null for HEAD snapshot) |
+
+**PK**: (component, captured_at)
+
+### manifest_sha_deltas
+Upstream commit changelog between consecutive SHA bumps for a component. Fetched from GitHub compare API.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| component | TEXT | Same as `component_manifest_pins.component` |
+| old_sha | TEXT | Previous pinned SHA |
+| new_sha | TEXT | New pinned SHA |
+| repo_url | TEXT | Upstream repo URL |
+| commit_count | INT | Total commits between old and new SHA |
+| commits_json | TEXT | JSON array of `{"sha", "message", "author", "date"}` (capped at 50) |
+| pr_number | INT | Operator PR that bumped the SHA |
+| fetched_at | TEXT | When the compare was fetched |
+
+**PK**: (component, old_sha, new_sha)
+
+**Correlating manifest bumps with test failures:**
+```sql
+-- "KServe test broke on Mar 26. Was there a manifest SHA bump?"
+SELECT cmp.component, cmp.pinned_sha, cmp.captured_at,
+       msd.old_sha, msd.commit_count, msd.commits_json
+FROM component_manifest_pins cmp
+LEFT JOIN manifest_sha_deltas msd
+    ON msd.component = cmp.component AND msd.new_sha = cmp.pinned_sha
+WHERE cmp.component = 'kserve'
+ORDER BY cmp.captured_at DESC
+LIMIT 5;
+```
 
 ## JIRA Tables
 

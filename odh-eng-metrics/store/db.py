@@ -82,7 +82,22 @@ CREATE TABLE IF NOT EXISTS ci_builds (
     job_name    TEXT NOT NULL,
     duration_seconds REAL,
     result      TEXT NOT NULL DEFAULT 'unknown',
-    started_at  TEXT
+    started_at  TEXT,
+    base_sha    TEXT,
+    pull_sha    TEXT
+);
+
+CREATE TABLE IF NOT EXISTS ci_pr_metadata (
+    repo        TEXT NOT NULL,
+    number      INTEGER NOT NULL,
+    title       TEXT,
+    author      TEXT,
+    state       TEXT,
+    jira_keys   TEXT,
+    changed_files TEXT,
+    changed_components TEXT,
+    fetched_at  TEXT NOT NULL,
+    PRIMARY KEY (repo, number)
 );
 
 CREATE TABLE IF NOT EXISTS code_risk_scores (
@@ -172,6 +187,29 @@ CREATE TABLE IF NOT EXISTS agentready_assessments (
     assessed_at         TEXT NOT NULL,
     PRIMARY KEY (repo_url, project)
 );
+
+CREATE TABLE IF NOT EXISTS component_manifest_pins (
+    component   TEXT NOT NULL,
+    repo_url    TEXT NOT NULL,
+    branch      TEXT,
+    pinned_sha  TEXT NOT NULL,
+    source_path TEXT,
+    captured_at TEXT NOT NULL,
+    pr_number   INTEGER,
+    PRIMARY KEY (component, captured_at)
+);
+
+CREATE TABLE IF NOT EXISTS manifest_sha_deltas (
+    component       TEXT NOT NULL,
+    old_sha         TEXT NOT NULL,
+    new_sha         TEXT NOT NULL,
+    repo_url        TEXT NOT NULL,
+    commit_count    INTEGER,
+    commits_json    TEXT,
+    pr_number       INTEGER,
+    fetched_at      TEXT NOT NULL,
+    PRIMARY KEY (component, old_sha, new_sha)
+);
 """
 
 
@@ -196,8 +234,11 @@ class Store:
             ("ci_builds", "peak_cpu_cores", "REAL"),
             ("ci_builds", "peak_memory_bytes", "REAL"),
             ("ci_builds", "total_step_seconds", "REAL"),
+            ("ci_builds", "base_sha", "TEXT"),
+            ("ci_builds", "pull_sha", "TEXT"),
             ("jira_issues", "description", "TEXT"),
             ("jira_issues", "comments", "TEXT"),
+            ("merged_prs", "is_manifest_update", "INTEGER DEFAULT 0"),
         ]
         for table, column, col_type in migrations:
             try:
@@ -221,15 +262,36 @@ class Store:
             """INSERT OR REPLACE INTO merged_prs
                (repo, number, title, author, created_at, merged_at, first_commit_at,
                 base_branch, additions, deletions, jira_keys,
-                merge_sha, is_ai_assisted, changed_files, changed_components)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                merge_sha, is_ai_assisted, changed_files, changed_components,
+                is_manifest_update)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 repo, pr["number"], pr.get("title"), pr.get("author"),
                 pr.get("created_at"), pr["merged_at"], pr.get("first_commit_at"),
                 pr.get("base_branch"), pr.get("additions", 0), pr.get("deletions", 0),
                 jira_keys, pr.get("merge_sha"), int(pr.get("is_ai_assisted", False)),
                 changed_files, changed_components,
+                int(pr.get("is_manifest_update", False)),
             ),
+        )
+        self.conn.commit()
+
+    def upsert_ci_pr_metadata(self, repo: str, number: int, title: str | None,
+                               author: str | None, state: str | None,
+                               jira_keys: list[str] | None = None,
+                               changed_files: list[str] | None = None,
+                               changed_components: list[str] | None = None,
+                               fetched_at: str | None = None) -> None:
+        self.conn.execute(
+            """INSERT OR REPLACE INTO ci_pr_metadata
+               (repo, number, title, author, state, jira_keys,
+                changed_files, changed_components, fetched_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (repo, number, title, author, state,
+             json.dumps(jira_keys or []),
+             json.dumps(changed_files or []),
+             json.dumps(changed_components or []),
+             fetched_at or datetime.utcnow().isoformat()),
         )
         self.conn.commit()
 
@@ -287,14 +349,18 @@ class Store:
                         started_at: str | None = None,
                         peak_cpu_cores: float | None = None,
                         peak_memory_bytes: float | None = None,
-                        total_step_seconds: float | None = None) -> None:
+                        total_step_seconds: float | None = None,
+                        base_sha: str | None = None,
+                        pull_sha: str | None = None) -> None:
         self.conn.execute(
             """INSERT OR REPLACE INTO ci_builds
                (build_id, pr_number, job_name, duration_seconds, result, started_at,
-                peak_cpu_cores, peak_memory_bytes, total_step_seconds)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                peak_cpu_cores, peak_memory_bytes, total_step_seconds,
+                base_sha, pull_sha)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (build_id, pr_number, job_name, duration_seconds, result, started_at,
-             peak_cpu_cores, peak_memory_bytes, total_step_seconds),
+             peak_cpu_cores, peak_memory_bytes, total_step_seconds,
+             base_sha, pull_sha),
         )
         self.conn.commit()
 
@@ -373,7 +439,8 @@ class Store:
                            suite: str | None = None,
                            duration_seconds: float | None = None,
                            is_leaf: bool = True,
-                           failure_message: str | None = None) -> None:
+                           failure_message: str | None = None,
+                           _batch: bool = False) -> None:
         self.conn.execute(
             """INSERT OR REPLACE INTO ci_test_results
                (build_id, test_name, suite, test_variant, status,
@@ -382,7 +449,8 @@ class Store:
             (build_id, test_name, suite, test_variant, status,
              duration_seconds, int(is_leaf), failure_message),
         )
-        self.conn.commit()
+        if not _batch:
+            self.conn.commit()
 
     def get_test_results(self, build_id: str | None = None,
                          status: str | None = None,
@@ -620,6 +688,55 @@ class Store:
         q += " ORDER BY project, repo_url"
         rows = self.conn.execute(q, params).fetchall()
         return [dict(r) for r in rows]
+
+    # --- Component manifest tracking ---
+
+    def upsert_manifest_pin(self, component: str, repo_url: str,
+                            branch: str | None, pinned_sha: str,
+                            source_path: str | None, captured_at: str,
+                            pr_number: int | None = None) -> None:
+        self.conn.execute(
+            """INSERT OR REPLACE INTO component_manifest_pins
+               (component, repo_url, branch, pinned_sha, source_path,
+                captured_at, pr_number)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (component, repo_url, branch, pinned_sha, source_path,
+             captured_at, pr_number),
+        )
+        self.conn.commit()
+
+    def upsert_manifest_delta(self, component: str, old_sha: str, new_sha: str,
+                               repo_url: str, commit_count: int,
+                               commits_json: str, pr_number: int | None = None,
+                               fetched_at: str | None = None) -> None:
+        self.conn.execute(
+            """INSERT OR REPLACE INTO manifest_sha_deltas
+               (component, old_sha, new_sha, repo_url, commit_count,
+                commits_json, pr_number, fetched_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (component, old_sha, new_sha, repo_url, commit_count,
+             commits_json, pr_number,
+             fetched_at or datetime.utcnow().isoformat()),
+        )
+        self.conn.commit()
+
+    def get_manifest_pins(self, component: str | None = None) -> list[dict]:
+        q = "SELECT * FROM component_manifest_pins"
+        params: list[Any] = []
+        if component:
+            q += " WHERE component = ?"
+            params.append(component)
+        q += " ORDER BY component, captured_at"
+        return [dict(r) for r in self.conn.execute(q, params).fetchall()]
+
+    def get_manifest_deltas(self, component: str | None = None) -> list[dict]:
+        q = "SELECT * FROM manifest_sha_deltas"
+        params: list[Any] = []
+        if component:
+            q += " WHERE component = ?"
+            params.append(component)
+        q += " ORDER BY component, fetched_at"
+        return [dict(r) for r in self.conn.execute(q, params).fetchall()]
 
     def close(self) -> None:
         self.conn.close()

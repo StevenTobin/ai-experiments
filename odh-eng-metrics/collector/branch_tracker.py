@@ -71,25 +71,44 @@ def _tags_containing(repo_path: Path, sha: str, pattern: str | None = None) -> l
 
 
 def _earliest_tag_on_branch(
-    repo_path: Path, sha: str, branch_ref: str, tag_pattern: str = "v*"
+    repo_path: Path,
+    sha: str,
+    branch_ref: str,
+    tag_pattern: str = "v*",
+    branch_shas: set[str] | None = None,
 ) -> tuple[str | None, str | None]:
     """Find the earliest tag reachable from branch_ref that contains sha."""
-    if not _commit_in_ref(repo_path, sha, branch_ref):
+    if branch_shas is not None:
+        if sha not in branch_shas:
+            return None, None
+    elif not _commit_in_ref(repo_path, sha, branch_ref):
         return None, None
 
     all_tags = _tags_containing(repo_path, sha, tag_pattern)
     for tag_name, tag_date in all_tags:
-        if _commit_in_ref(repo_path, tag_name, branch_ref):
+        tag_sha = _git(repo_path, "rev-parse", tag_name)
+        if branch_shas is not None:
+            if tag_sha in branch_shas:
+                return tag_name, tag_date
+        elif _commit_in_ref(repo_path, tag_name, branch_ref):
             return tag_name, tag_date
 
     return None, None
+
+
+def _branch_commit_set(repo_path: Path, ref: str) -> set[str]:
+    """Return the set of all commit SHAs reachable from ref (single git call)."""
+    output = _git(repo_path, "log", "--format=%H", ref)
+    if not output:
+        return set()
+    return set(output.split("\n"))
 
 
 def track_pr_propagation(
     store: Store,
     upstream_path: Path,
     cfg: dict,
-    limit: int = 500,
+    limit: int = 200,
 ) -> int:
     """For recent upstream PRs, track when their merge commits reached stable, rhoai, and a release tag."""
     repo_name = f"{cfg['upstream']['owner']}/{cfg['upstream']['repo']}"
@@ -100,45 +119,52 @@ def track_pr_propagation(
     recent_prs = prs[-limit:]
     count = 0
 
-    # Pre-resolve branch refs once.
     branch_refs: dict[str, str] = {}
     for branch in ["stable", "rhoai"]:
         ref = _resolve_ref(upstream_path, branch)
         if ref:
             branch_refs[branch] = ref
 
-    # Expected branches + a tag entry = complete set for a PR
+    # Pre-compute all commits on each branch in one git call per branch,
+    # replacing N per-PR `merge-base --is-ancestor` subprocess calls with
+    # O(1) set lookups.
+    branch_commits: dict[str, set[str]] = {}
+    for branch, ref in branch_refs.items():
+        log.info("Pre-loading commit set for %s...", branch)
+        branch_commits[branch] = _branch_commit_set(upstream_path, ref)
+        log.info("  %s: %d commits", branch, len(branch_commits[branch]))
+
     expected_branches = set(branch_refs.keys())
 
-    skipped = 0
+    fully_cached = 0
+    not_on_branch = 0
     for i, pr in enumerate(recent_prs):
         existing_arrivals = store.get_branch_arrivals(repo_name, pr["number"])
         existing_keys = {a["branch"] for a in existing_arrivals}
         has_all_branches = expected_branches <= existing_keys
         has_tag = any(k.startswith("tag:") for k in existing_keys)
         if has_all_branches and has_tag:
-            skipped += 1
+            fully_cached += 1
             continue
 
         merge_sha = pr.get("merge_sha") or _find_merge_sha(upstream_path, pr)
         if not merge_sha:
             continue
 
-        if (i + 1 - skipped) % 50 == 0:
-            log.info("Branch tracking progress: %d/%d PRs (%d complete)",
-                     i + 1, len(recent_prs), skipped)
-
+        found_any = False
         for branch, ref in branch_refs.items():
             if branch in existing_keys:
                 continue
-            if not _commit_in_ref(upstream_path, merge_sha, ref):
+            bset = branch_commits.get(branch, set())
+            if merge_sha not in bset:
                 continue
             tag_name, tag_date = _earliest_tag_on_branch(
-                upstream_path, merge_sha, ref,
+                upstream_path, merge_sha, ref, branch_shas=bset,
             )
             if tag_date:
                 store.upsert_branch_arrival(repo_name, pr["number"], branch, tag_date)
                 count += 1
+                found_any = True
 
         if not has_tag:
             all_tags = _tags_containing(upstream_path, merge_sha, "v*")
@@ -146,9 +172,17 @@ def track_pr_propagation(
                 first_tag, first_date = all_tags[0]
                 store.upsert_branch_arrival(repo_name, pr["number"], f"tag:{first_tag}", first_date)
                 count += 1
+                found_any = True
 
-    log.info("Tracked %d branch arrivals for %d PRs (%d already complete)",
-             count, len(recent_prs), skipped)
+        if not found_any:
+            not_on_branch += 1
+
+        if (i + 1) % 50 == 0:
+            log.info("Branch tracking: %d/%d PRs (%d complete, %d not yet propagated, %d arrivals stored)",
+                     i + 1, len(recent_prs), fully_cached, not_on_branch, count)
+
+    log.info("Tracked %d branch arrivals for %d PRs (%d already complete, %d not yet propagated)",
+             count, len(recent_prs), fully_cached, not_on_branch)
     return count
 
 

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from collections import defaultdict
 from datetime import datetime, timedelta
 
@@ -577,6 +578,17 @@ def compute_infra_vs_code_failures(store: Store) -> list[dict]:
     return results
 
 
+_GENERIC_FAILURE_RE = re.compile(
+    r"^Some steps failed:|"
+    r"^Failed to get pod .+ for lifecycle metrics$|"
+    r"client rate limiter Wait returned an error",
+)
+
+
+def _is_generic_failure(msg: str) -> bool:
+    return bool(_GENERIC_FAILURE_RE.search(msg))
+
+
 def compute_component_failure_reasons(store: Store) -> list[dict]:
     """Top failure messages per component (top 3 each)."""
     pr_components = _build_pr_components(store)
@@ -588,6 +600,8 @@ def compute_component_failure_reasons(store: Store) -> list[dict]:
 
     comp_msg_counts: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
     for m in all_msgs:
+        if _is_generic_failure(m["message"]):
+            continue
         pr_num = build_to_pr.get(m["build_id"])
         if pr_num is None:
             continue
@@ -625,6 +639,8 @@ def compute_jira_failure_reasons(store: Store) -> list[dict]:
 
     jira_msg_counts: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
     for m in all_msgs:
+        if _is_generic_failure(m["message"]):
+            continue
         pr_num = build_to_pr.get(m["build_id"])
         if pr_num is None:
             continue

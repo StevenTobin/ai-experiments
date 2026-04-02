@@ -241,7 +241,19 @@ def _collect_test_results(client: httpx.Client, vm_url: str, vl_url: str | None,
     """
     count = 0
 
-    # Failed leaf tests (the useful signal)
+    # Build set of build_ids already in ci_test_results to skip re-fetching
+    existing_test_bids: set[str] = set()
+    try:
+        rows = store.conn.execute(
+            "SELECT DISTINCT build_id FROM ci_test_results"
+        ).fetchall()
+        existing_test_bids = {r["build_id"] for r in rows}
+        if existing_test_bids:
+            log.info("Skipping %d builds already in ci_test_results", len(existing_test_bids))
+    except Exception:
+        pass
+
+    # Failed leaf tests (the useful signal) — full lookback
     fail_query = (
         f'last_over_time(ci_junit_test_duration_seconds'
         f'{{org="{org}",repo="{repo}",status="failed",leaf="true"}}'
@@ -252,11 +264,15 @@ def _collect_test_results(client: httpx.Client, vm_url: str, vl_url: str | None,
         results = _promql_query_long(client, vm_url, fail_query)
         log.info("Got %d failed leaf test series", len(results))
 
+        skipped = 0
         for r in results:
             metric = r.get("metric", {})
             bid = metric.get("build_id", "")
             test_name = metric.get("test_name", "")
             if not bid or not test_name:
+                continue
+            if bid in existing_test_bids:
+                skipped += 1
                 continue
             try:
                 duration = float(r["value"][1])
@@ -270,10 +286,58 @@ def _collect_test_results(client: httpx.Client, vm_url: str, vl_url: str | None,
                 suite=metric.get("suite"),
                 duration_seconds=duration,
                 is_leaf=True,
+                _batch=True,
             )
             count += 1
+        store.conn.commit()
+        if skipped:
+            log.info("Skipped %d already-stored failed test results", skipped)
     except Exception:
         log.warning("Could not fetch failed test results", exc_info=True)
+
+    # Passed leaf tests — shorter lookback (30d) since we only need these
+    # to answer "was this test passing before it broke?" Recent data suffices.
+    pass_lookback = min(lookback_days, 30)
+    pass_query = (
+        f'last_over_time(ci_junit_test_duration_seconds'
+        f'{{org="{org}",repo="{repo}",status="passed",leaf="true"}}'
+        f'[{pass_lookback}d])'
+    )
+    try:
+        log.info("Querying passed leaf test results (last %dd)...", pass_lookback)
+        pass_results = _promql_query_long(client, vm_url, pass_query)
+        log.info("Got %d passed leaf test series", len(pass_results))
+
+        skipped = 0
+        for r in pass_results:
+            metric = r.get("metric", {})
+            bid = metric.get("build_id", "")
+            test_name = metric.get("test_name", "")
+            if not bid or not test_name:
+                continue
+            if bid in existing_test_bids:
+                skipped += 1
+                continue
+            try:
+                duration = float(r["value"][1])
+            except (IndexError, ValueError, TypeError):
+                duration = None
+            store.upsert_test_result(
+                build_id=bid,
+                test_name=test_name,
+                test_variant=metric.get("test_variant", ""),
+                status="passed",
+                suite=metric.get("suite"),
+                duration_seconds=duration,
+                is_leaf=True,
+                _batch=True,
+            )
+            count += 1
+        store.conn.commit()
+        if skipped:
+            log.info("Skipped %d already-stored passed test results", skipped)
+    except Exception:
+        log.warning("Could not fetch passed test results", exc_info=True)
 
     # Enrich with failure messages from VictoriaLogs
     vl_enriched = 0
@@ -325,15 +389,17 @@ def _collect_test_results(client: httpx.Client, vm_url: str, vl_url: str | None,
             log.warning("Could not fetch test failure messages from VictoriaLogs",
                         exc_info=True)
 
-    # Fallback: fetch JUnit XML directly from GCS when VictoriaLogs has no data
+    # Fallback: fetch JUnit XML directly from GCS for any failed tests still
+    # missing failure messages — regardless of whether VictoriaLogs returned
+    # partial results.
     null_msg_count = store.conn.execute(
         "SELECT COUNT(*) as n FROM ci_test_results "
         "WHERE status = 'failed' AND failure_message IS NULL"
     ).fetchone()["n"]
 
-    if null_msg_count > 0 and vl_enriched == 0:
-        log.info("VictoriaLogs had no test messages; falling back to GCS JUnit XML "
-                 "for %d failed tests...", null_msg_count)
+    if null_msg_count > 0:
+        log.info("Fetching JUnit XML from GCS for %d failed tests still missing "
+                 "failure messages...", null_msg_count)
         gcs_enriched = _enrich_from_gcs_junit(client, org, repo, store)
         if gcs_enriched:
             log.info("Enriched %d test results with failure messages (GCS)", gcs_enriched)
@@ -409,7 +475,7 @@ def _enrich_from_gcs_junit(client: httpx.Client, org: str, repo: str,
         SELECT DISTINCT t.build_id, t.test_variant, b.pr_number, b.job_name
         FROM ci_test_results t
         JOIN ci_builds b ON t.build_id = b.build_id
-        WHERE t.status = 'failed' AND t.failure_message IS NULL AND t.test_variant != ''
+        WHERE t.status = 'failed' AND t.failure_message IS NULL
     """).fetchall()
 
     seen_variants: set[tuple[str, str]] = set()
@@ -425,10 +491,16 @@ def _enrich_from_gcs_junit(client: httpx.Client, org: str, repo: str,
 
         pr = row["pr_number"]
         job = row["job_name"]
-        url = (
-            f"{GCS_BASE}/pr-logs/pull/{org}_{repo}"
-            f"/{pr}/{job}/{bid}/artifacts/{variant}/e2e/artifacts/junit_report.xml"
-        )
+        if variant:
+            url = (
+                f"{GCS_BASE}/pr-logs/pull/{org}_{repo}"
+                f"/{pr}/{job}/{bid}/artifacts/{variant}/e2e/artifacts/junit_report.xml"
+            )
+        else:
+            url = (
+                f"{GCS_BASE}/pr-logs/pull/{org}_{repo}"
+                f"/{pr}/{job}/{bid}/artifacts/e2e/artifacts/junit_report.xml"
+            )
 
         try:
             resp = client.get(url, timeout=30)
@@ -485,6 +557,80 @@ def _enrich_from_gcs_junit(client: httpx.Client, org: str, repo: str,
 
     if enriched:
         store.conn.commit()
+    return enriched
+
+
+def _enrich_build_refs_from_gcs(client: httpx.Client, org: str, repo: str,
+                                store: Store) -> int:
+    """Fetch base_sha and pull_sha from Prow's started.json in GCS.
+
+    Only fetches for builds that don't already have a base_sha set.
+    The started.json file contains the git refs the presubmit ran against.
+    """
+    GCS_BASE = "https://storage.googleapis.com/test-platform-results"
+
+    rows = store.conn.execute("""
+        SELECT build_id, pr_number, job_name
+        FROM ci_builds
+        WHERE base_sha IS NULL
+        ORDER BY started_at DESC
+        LIMIT 500
+    """).fetchall()
+
+    if not rows:
+        return 0
+
+    log.info("Fetching git refs from GCS started.json for %d builds...", len(rows))
+    enriched = 0
+
+    for row in rows:
+        bid = row["build_id"]
+        pr = row["pr_number"]
+        job = row["job_name"]
+        url = (
+            f"{GCS_BASE}/pr-logs/pull/{org}_{repo}"
+            f"/{pr}/{job}/{bid}/started.json"
+        )
+
+        try:
+            resp = client.get(url, timeout=10)
+            if resp.status_code != 200:
+                continue
+            data = resp.json()
+        except Exception:
+            continue
+
+        repo_key = f"{org}/{repo}"
+        repos = data.get("repos", {})
+        refs_str = repos.get(repo_key, "")
+
+        if not refs_str:
+            continue
+
+        # Format: "base_sha,pull_sha:pr_number" or just "base_sha"
+        base_sha = None
+        pull_sha = None
+        if "," in refs_str:
+            parts = refs_str.split(",", 1)
+            base_sha = parts[0]
+            pull_part = parts[1]
+            if ":" in pull_part:
+                pull_sha = pull_part.split(":")[0]
+            else:
+                pull_sha = pull_part
+        else:
+            base_sha = refs_str.split(":")[0] if ":" in refs_str else refs_str
+
+        if base_sha:
+            store.conn.execute(
+                "UPDATE ci_builds SET base_sha = ?, pull_sha = ? WHERE build_id = ?",
+                (base_sha, pull_sha, bid),
+            )
+            enriched += 1
+
+    if enriched:
+        store.conn.commit()
+        log.info("Enriched %d builds with git refs from GCS", enriched)
     return enriched
 
 
@@ -740,6 +886,10 @@ def collect_ci_builds(store: Store, cfg: dict, lookback_days: int = 365) -> int:
 
             log.info("Stored %d CI builds: %d success, %d failure, %d unknown",
                      count, n_pass, n_fail, count - n_pass - n_fail)
+
+            # Enrich builds with git refs (base_sha, pull_sha) from GCS
+            log.info("Enriching builds with git refs from GCS...")
+            _enrich_build_refs_from_gcs(client, org, repo, store)
 
             if ci_cfg.get("collect_steps", True):
                 log.info("Collecting step-level data...")

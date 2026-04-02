@@ -9,4 +9,5 @@ build/
 .venv/
 venv/
 odh_eng_metrics.db
+reports/*.html
 !README.md
