@@ -402,6 +402,26 @@ review_pr() {
         echo "SKIPPED: earlier pipeline stage failed" > "$cluster_log"
     fi
 
+    # --- CodeRabbit review (optional) ---
+    local coderabbit_log="${CACHE_DIR}/${repo_name}-PR${pr_number}-coderabbit.log"
+    local coderabbit_status="SKIP"
+    if command -v coderabbit &>/dev/null; then
+        log_info "  Running CodeRabbit review..."
+        local base_branch
+        base_branch=$(gh pr view "$pr_number" --repo "$full_repo" --json baseRefName --jq '.baseRefName' 2>/dev/null) || base_branch="main"
+
+        if run_with_timeout "$TEST_TIMEOUT" "$coderabbit_log" \
+            coderabbit review --plain --base "origin/${base_branch}" \
+                --config "${clone_dir}/AGENTS.md" \
+                --cwd "$clone_dir"; then
+            coderabbit_status="DONE"
+        else
+            coderabbit_status="FAIL"
+        fi
+    else
+        echo "SKIPPED: coderabbit CLI not installed" > "$coderabbit_log"
+    fi
+
     # --- compose context for Claude ---
     local context_file="${CACHE_DIR}/${repo_name}-PR${pr_number}-context.md"
     cat > "$context_file" <<CONTEXT_EOF
@@ -416,6 +436,7 @@ review_pr() {
 - Lint: ${lint_status}
 - Unit Tests: ${test_status}
 - Build: ${build_status}
+- CodeRabbit: ${coderabbit_status}
 
 
 ### Build Output (last 100 lines)
@@ -436,6 +457,11 @@ $(tail -100 "$test_log" 2>/dev/null || echo "No output")
 ## Cluster Smoke Test
 \`\`\`
 $(cat "$cluster_log" 2>/dev/null || echo "Not run")
+\`\`\`
+
+## CodeRabbit Review (${coderabbit_status})
+\`\`\`
+$(tail -200 "$coderabbit_log" 2>/dev/null || echo "Not run")
 \`\`\`
 
 ## PR Diff
@@ -474,10 +500,16 @@ CONTEXT_EOF
 | Lint | ${lint_status} |
 | Unit Tests | ${test_status} |
 | Build | ${build_status} |
+| CodeRabbit | ${coderabbit_status} |
 
 ## Cluster Smoke Test
 \`\`\`
 $(cat "$cluster_log" 2>/dev/null || echo "Not run")
+\`\`\`
+
+## CodeRabbit Review
+\`\`\`
+$(tail -200 "$coderabbit_log" 2>/dev/null || echo "Not run")
 \`\`\`
 
 ## AI Review

@@ -3,8 +3,9 @@ You are reviewing a pull request for a Kubernetes operator project. You have bee
 1. The PR diff
 2. Build results (make build, make lint, make unit-test)
 3. Cluster smoke test results (if available)
+4. CodeRabbit review output (if available)
 
-Analyze the PR thoroughly and produce a structured review.
+Analyze the PR thoroughly and produce a structured review. If a CodeRabbit review is included, incorporate its findings -- confirm, refute, or expand on them rather than repeating them verbatim.
 
 ## Instructions
 
