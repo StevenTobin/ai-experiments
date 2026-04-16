@@ -1,0 +1,15 @@
+[Unit]
+Description=PR Review Bot - scan team-compass PRs and generate AI reviews
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/git/ai-experiments/pr-review/pr-review.sh
+Environment=PATH=/usr/local/bin:/usr/bin:/home/%u/.local/bin
+TimeoutStartSec=3600
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target
