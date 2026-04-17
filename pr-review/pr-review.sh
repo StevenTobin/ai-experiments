@@ -296,6 +296,11 @@ review_pr() {
     log_info "Processing: ${repo_name} PR #${pr_number} - ${title}"
 
     # --- skip checks ---
+    if [ "$author" = "$GH_USER" ]; then
+        log_info "  Skipping own PR"
+        return 0
+    fi
+
     if report_exists "$repo_name" "$pr_number"; then
         log_info "  Report already exists for today, skipping"
         return 0
