@@ -7,6 +7,7 @@ After=network-online.target
 Type=oneshot
 ExecStart=%h/git/ai-experiments/pr-review/pr-review.sh
 Environment=PATH=/usr/local/bin:/usr/bin:/home/%u/.local/bin
+EnvironmentFile=%h/.secrets.systemd.env
 TimeoutStartSec=3600
 StandardOutput=journal
 StandardError=journal
