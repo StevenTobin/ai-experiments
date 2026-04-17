@@ -115,9 +115,7 @@ user_has_reviewed() {
 report_exists() {
     local repo_name=$1
     local pr_number=$2
-    local today
-    today=$(date +%Y-%m-%d)
-    [ -f "${REPORTS_DIR}/${repo_name}-PR${pr_number}-${today}.md" ]
+    compgen -G "${REPORTS_DIR}/${repo_name}-PR${pr_number}-*.md" > /dev/null 2>&1
 }
 
 has_make_target() {
