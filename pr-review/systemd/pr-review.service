@@ -7,7 +7,12 @@ After=network-online.target
 Type=oneshot
 ExecStart=%h/git/ai-experiments/pr-review/pr-review.sh
 Environment=PATH=/usr/local/bin:/usr/bin:/home/%u/.local/bin
+Environment=GOMAXPROCS=4
 EnvironmentFile=%h/.secrets.systemd.env
+Nice=15
+CPUWeight=25
+MemoryHigh=8G
+IOWeight=25
 TimeoutStartSec=3600
 StandardOutput=journal
 StandardError=journal
